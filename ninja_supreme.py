@@ -302,6 +302,15 @@ def add_ledger_entry(data: Dict) -> str:
 # REAL-TIME STREAMING SIMULATION ENDPOINT
 # -----------------------------------------------------------------------------
 async def simulation_generator(params: CosmoParams):
+
+    # Corrige: define os parâmetros globais para uso no dut_patch_system
+    global Omega_m_0, Omega_S_0, xi_patch, lambda_phi, sigma8_0
+    Omega_m_0 = params.Omega_m_0
+    Omega_S_0 = params.Omega_S_0
+    xi_patch = params.xi_patch
+    lambda_phi = params.lambda_phi
+    sigma8_0 = params.sigma8_0
+
     yield f"data: {{'status': 'initializing NINJA core...'}}\n\n"
     await asyncio.sleep(0.1)
 
@@ -610,6 +619,12 @@ async def dashboard(request: Request):
             <div id="ledger_blocks" class="max-h-96 overflow-y-auto space-y-4 text-sm"></div>
         </div>
 
+            <!-- Painel para mostrar o JSON da resposta da live stream -->
+            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-cyan-400/30 mt-8">
+                <h3 class="text-xl font-bold text-cyan-400 mb-4">Live Stream Result (JSON)</h3>
+                <pre id="stream_result" class="text-xs text-green-300 font-mono whitespace-pre-wrap"></pre>
+            </div>
+
         <div id="status_bar" class="mt-12 p-8 bg-gray-900/50 backdrop-blur-xl rounded-2xl border border-gray-700/50 text-center">
             <div class="text-xl text-gray-400 font-mono">Ready to execute NINJA SUPREME</div>
         </div>
@@ -653,40 +668,42 @@ async def dashboard(request: Request):
             const decoder = new TextDecoder();
             let buffer = '';
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                buffer += decoder.decode(value, {stream: true});
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, {stream: true});
 
-                // CORREÇÃO AQUI: Duas barras para escapar a quebra de linha no Python
-                let lines = buffer.split('\\n\\n');
+                    // CORREÇÃO: usar quebra de linha real para dividir os eventos do stream
+                    let lines = buffer.split('\n\n');
 
-                buffer = lines.pop();
-                for (const line of lines) {
-                    if (!line.trim().startsWith('data:')) continue;
-                    let payload = line.trim().slice(5).trim();
-                    try {
-                        payload = payload.replace(/'/g, '"');
-                        const data = JSON.parse(payload);
-                        if (data.type === 'progress') {
-                            document.getElementById('status_bar').innerHTML =
-                                `<div class="text-yellow-400 text-2xl animate-pulse">Integrating... ${data.value}%</div>`;
-                        }
-                        if (data.type === 'done') {
-                            const r = data.result;
-                            document.getElementById('H0_local').textContent = r.H0_phys_forward.toFixed(3);
-                            document.getElementById('delta_chi2').textContent = r.Delta_chi2.toFixed(1);
-                            document.getElementById('rev_delta').textContent = r.reverse_delta;
-                            document.getElementById('hz_plot').src = r.plot_b64;
-                            document.getElementById('status_bar').innerHTML =
-                                `<div class="text-green-400 text-2xl glow">NINJA SUPREME EXECUTADO | Δχ² = ${r.Delta_chi2}</div>`;
-                            refreshLedger();
-                            clearLoading('btn_stream');
-                        }
-                    } catch(e) { /* ignore parse errors */ }
+                    buffer = lines.pop();
+                    for (const line of lines) {
+                        if (!line.trim().startsWith('data:')) continue;
+                        let payload = line.trim().slice(5).trim();
+                        try {
+                            payload = payload.replace(/'/g, '"');
+                            const data = JSON.parse(payload);
+                            if (data.type === 'progress') {
+                                document.getElementById('status_bar').innerHTML =
+                                    `<div class="text-yellow-400 text-2xl animate-pulse">Integrating... ${data.value}%</div>`;
+                            }
+                            if (data.type === 'done') {
+                                const r = data.result;
+                                document.getElementById('H0_local').textContent = r.H0_phys_forward.toFixed(3);
+                                document.getElementById('delta_chi2').textContent = r.Delta_chi2.toFixed(1);
+                                document.getElementById('rev_delta').textContent = r.reverse_delta;
+                                document.getElementById('hz_plot').src = r.plot_b64;
+                                document.getElementById('status_bar').innerHTML =
+                                    `<div class="text-green-400 text-2xl glow">NINJA SUPREME EXECUTADO | Δχ² = ${r.Delta_chi2}</div>`;
+                                refreshLedger();
+                                clearLoading('btn_stream');
+                                    // Exibe o JSON completo da resposta da live stream
+                                    document.getElementById('stream_result').textContent = JSON.stringify(r, null, 2);
+                            }
+                        } catch(e) { /* ignore parse errors */ }
+                    }
                 }
-            }
-            clearLoading('btn_stream');
+                clearLoading('btn_stream');
         }
 
         function drawFs8Chart(result) {
