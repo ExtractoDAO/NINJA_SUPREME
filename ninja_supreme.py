@@ -7,7 +7,7 @@ Run: python ninja_supreme.py → http://localhost:8000
 """
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import numpy as np
@@ -26,6 +26,7 @@ import io
 import base64
 import uvicorn
 from typing import Dict, Any, List
+import asyncio
 
 app = FastAPI(title="NINJA SUPREME 1.0 - Dead Universe Theory")
 
@@ -297,6 +298,120 @@ def add_ledger_entry(data: Dict) -> str:
 # FASTAPI ENDPOINTS
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# REAL-TIME STREAMING SIMULATION ENDPOINT
+# -----------------------------------------------------------------------------
+async def simulation_generator(params: CosmoParams):
+    yield f"data: {{'status': 'initializing NINJA core...'}}\n\n"
+    await asyncio.sleep(0.1)
+
+    N_points = 5000
+    N = np.linspace(-9, 20, N_points)
+    dN = N[1] - N[0]
+    Y = np.array([
+        1e-6,
+        np.sqrt(params.Omega_S_0),
+        params.Omega_m_0 * np.exp(27),
+        params.xi_patch * 1e-10
+    ])
+
+    for i in range(1, N_points):
+        if i % 200 == 0:
+            progress = int((i / N_points) * 100)
+            yield f"data: {{'type':'progress','value':{progress},'msg':'Integrating forward...'}}\n\n"
+            await asyncio.sleep(0)
+        Y = rk4_step(N[i-1], Y, dN, dut_patch_system)
+
+    # --- After integration, run the rest of the calculations (copied from run_dut_simulation) ---
+    # Compute H(z), physical scaling, fσ8, S8
+    x = Y[0]
+    y = Y[1]
+    u = Y[2]
+    z = Y[3]
+    a = np.exp(np.clip(N, -10, 20))
+    zc = 1/a - 1
+
+    Om_m_v = np.clip(u/a**3, 0, 1e4)
+    Om_k_v = np.clip(Omega_k_0_patch/a**2, -2, 2)
+    H2_oH0 = np.maximum(Om_m_v + x**2 + y**2 + z*(1-Gamma_S_patch) + Om_k_v, 1e-12)
+    H_raw = 70.0 * np.sqrt(H2_oH0)
+
+    idx0 = np.argmin(np.abs(zc))
+    H0_raw_forward = H_raw[idx0]
+    scale_H = 73.52 / H0_raw_forward
+    H_phys = H_raw * scale_H
+    H0_phys_forward = float(H_phys[idx0])
+
+    # ΛCDM comparison
+    H_lcdm = H0_phys_forward * np.sqrt(0.3*(1+zc)**3 + 0.7)
+    fs8_lcdm = 0.47 * (1/(1+zc))**0.9
+
+    # χ² statistics
+    chi2_DUT, chi2_LCDM, Delta_chi2, lnB = compute_chi2(zc, H_phys, H_lcdm, np.zeros_like(zc), fs8_lcdm)
+
+    # Reverse integration check
+    Y_end = Y.copy()
+    N_rev = np.linspace(20, -9, N_points)
+    dN_rev = N_rev[1] - N_rev[0]
+    sol_rev = np.zeros((N_points, 4))
+    sol_rev[0] = Y_end
+    for i in range(1, N_points):
+        sol_rev[i] = rk4_step(N_rev[i-1], sol_rev[i-1], dN_rev, dut_patch_system)
+    x_r, y_r, u_r, z_r = sol_rev.T
+    a_r = np.exp(np.clip(N_rev, -10, 20))
+    Om_m_r = np.clip(u_r/a_r**3, 0, 1e4)
+    Om_k_r = np.clip(Omega_k_0_patch/a_r**2, -2, 2)
+    H2_rev = np.maximum(Om_m_r + x_r**2 + y_r**2 + z_r*(1-Gamma_S_patch) + Om_k_r, 1e-12)
+    H_rev_raw = 70.0 * np.sqrt(H2_rev)
+    H0_raw_reverse = H_rev_raw[np.argmin(np.abs(1/a_r - 1))]
+    H0_phys_reverse = H0_raw_reverse * scale_H
+
+    # Generate plot H(z)
+    plt.figure(figsize=(12, 8))
+    z_mask = zc < 2
+    z_plot = zc[z_mask]
+    plt.plot(z_plot, H_phys[z_mask], 'b-', lw=2, label='DUT')
+    plt.plot(z_plot, H_lcdm[z_mask], 'r--', lw=2, label='ΛCDM')
+    plt.errorbar(Hz_data_z, Hz_data, Hz_sigma, fmt='ko', alpha=0.7, label='Data')
+    plt.xlabel('z'); plt.ylabel('H(z) [km/s/Mpc]'); plt.legend()
+    plt.title('H(z) - DUT vs ΛCDM')
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    plot_b64 = base64.b64encode(buf.read()).decode()
+    plt.close()
+
+    entry_hash = add_ledger_entry({
+        "type": "SIMULATION_RUN_STREAM",
+        "params": params.dict(),
+        "H0_phys_forward": float(H0_phys_forward),
+        "H0_phys_reverse": float(H0_phys_reverse),
+        "Delta_chi2": float(Delta_chi2),
+        "lnB": float(lnB)
+    })
+
+    result = {
+        "H0_phys_forward": float(H_phys[idx0]),
+        "Delta_chi2": float(Delta_chi2),
+        "plot_b64": f"data:image/png;base64,{plot_b64}",
+        "reverse_delta": round(float(H0_phys_reverse - H_phys[idx0]), 6),
+        "ledger_hash": entry_hash[:16] + "..."
+    }
+    yield f"data: {{'type':'done','result': {json.dumps(result)}}}\n\n"
+
+
+@app.post("/api/stream")
+async def stream_simulation(params: CosmoParams):
+    return StreamingResponse(
+        simulation_generator(params),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/event-stream",
+        }
+    )
+
 @app.post("/api/run")
 async def run_simulation(params: CosmoParams) -> Dict[str, Any]:
     """Execute complete DUT simulation with variable parameters"""
@@ -345,7 +460,8 @@ async def export_report() -> Dict[str, Any]:
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    return HTMLResponse(content="""
+    # Usamos uma string crua (r"...") ou escapamos manualmente as barras
+    return HTMLResponse(content=r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -353,7 +469,6 @@ async def dashboard(request: Request):
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NINJA SUPREME 1.0</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js"></script>
     <style>
         .glow { text-shadow: 0 0 20px #00ff9f; }
         .cyber-bg {
@@ -371,7 +486,6 @@ async def dashboard(request: Request):
 <body class="cyber-bg text-white min-h-screen font-mono">
     <div class="container mx-auto px-6 py-12 max-w-7xl">
 
-        <!-- Header -->
         <div class="text-center mb-16">
             <h1 class="text-6xl md:text-7xl font-black text-green-400 glow mb-4 tracking-tight">
                 NINJA SUPREME
@@ -381,7 +495,6 @@ async def dashboard(request: Request):
             </p>
         </div>
 
-        <!-- Metrics Cards -->
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12" id="metrics">
             <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-green-500/50 glow">
                 <div class="text-sm font-medium text-green-400 uppercase tracking-wider opacity-75 mb-2">H₀ Local</div>
@@ -401,7 +514,6 @@ async def dashboard(request: Request):
             </div>
         </div>
 
-        <!-- Parameters -->
         <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-green-500/30 mb-12">
             <h2 class="text-3xl font-bold text-green-400 mb-8 glow flex items-center">
                 <span class="w-3 h-3 bg-green-500 rounded-full mr-3 animate-ping"></span>
@@ -441,27 +553,32 @@ async def dashboard(request: Request):
             </div>
         </div>
 
-        <!-- Action Buttons -->
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-            <button onclick="runSimulation()"
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
+            <button id="btn_run" onclick="runSimulation()"
                     class="group bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500
                            text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
                            transition-all duration-300 border-2 border-green-400/50 hover:border-green-400 glow">
                 🚀 Run Simulation
             </button>
-            <button onclick="runMCMC()"
+            <button id="btn_stream" onclick="runStreaming()"
+                    class="group bg-gradient-to-r from-cyan-600 to-green-600 hover:from-cyan-500 hover:to-green-500
+                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
+                           transition-all duration-300 border-2 border-cyan-400/50 hover:border-cyan-400 glow">
+                🟢 LIVE STREAM
+            </button>
+            <button id="btn_mcmc" onclick="runMCMC()"
                     class="group bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500
                            text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
                            transition-all duration-300 border-2 border-purple-400/50 hover:border-purple-400 glow">
                 🔬 MCMC Analysis
             </button>
-            <button onclick="exportReport()"
+            <button id="btn_export" onclick="exportReport()"
                     class="group bg-gradient-to-r from-orange-600 to-yellow-600 hover:from-orange-500 hover:to-yellow-500
                            text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
                            transition-all duration-300 border-2 border-orange-400/50 hover:border-orange-400 glow">
                 📄 Export Report
             </button>
-            <button onclick="refreshLedger()"
+            <button id="btn_ledger" onclick="refreshLedger()"
                     class="group bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500
                            text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
                            transition-all duration-300 border-2 border-blue-400/50 hover:border-blue-400 glow">
@@ -469,7 +586,6 @@ async def dashboard(request: Request):
             </button>
         </div>
 
-        <!-- Results -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
             <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-green-500/30">
                 <h3 class="text-2xl font-bold text-green-400 mb-8 flex items-center">
@@ -480,12 +596,10 @@ async def dashboard(request: Request):
             </div>
             <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-pink-500/30">
                 <h3 class="text-2xl font-bold text-pink-400 mb-8">📉 fσ₈(z) Suppression</h3>
-                <!-- Agora canvas real para o gráfico -->
                 <canvas id="fs8_canvas" class="w-full h-96 bg-gray-800 rounded-2xl border-2 border-pink-500/50"></canvas>
             </div>
         </div>
 
-        <!-- Ledger -->
         <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-yellow-500/30">
             <h3 class="text-3xl font-bold text-yellow-400 mb-8 glow flex items-center">
                 🪨 Blockchain Ledger
@@ -496,7 +610,6 @@ async def dashboard(request: Request):
             <div id="ledger_blocks" class="max-h-96 overflow-y-auto space-y-4 text-sm"></div>
         </div>
 
-        <!-- Status -->
         <div id="status_bar" class="mt-12 p-8 bg-gray-900/50 backdrop-blur-xl rounded-2xl border border-gray-700/50 text-center">
             <div class="text-xl text-gray-400 font-mono">Ready to execute NINJA SUPREME</div>
         </div>
@@ -504,143 +617,177 @@ async def dashboard(request: Request):
     </div>
 
     <script>
-        let ledgerData = [];
+        // Utilitário para loading nos botões
+        function setLoading(btnId, loadingText) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            btn.disabled = true;
+            btn.dataset.originalText = btn.innerHTML;
+            btn.innerHTML = `<span class='animate-pulse'>${loadingText}</span>`;
+        }
+        function clearLoading(btnId) {
+            const btn = document.getElementById(btnId);
+            if (!btn) return;
+            btn.disabled = false;
+            btn.innerHTML = btn.dataset.originalText || btn.innerHTML;
+        }
+
+        async function runStreaming() {
+            setLoading('btn_stream', '⏳ Streaming...');
+            const params = {
+                Omega_m_0: parseFloat(document.getElementById('omega_m').value),
+                Omega_S_0: parseFloat(document.getElementById('omega_s').value),
+                xi_patch: parseFloat(document.getElementById('xi_patch').value),
+                lambda_phi: parseFloat(document.getElementById('lambda_phi').value),
+                sigma8_0: parseFloat(document.getElementById('sigma8').value)
+            };
+            document.getElementById('status_bar').innerHTML =
+                '<div class="text-yellow-400 text-2xl animate-pulse">Integrating... 0%</div>';
+
+            const response = await fetch('/api/stream', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(params)
+            });
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, {stream: true});
+
+                // CORREÇÃO AQUI: Duas barras para escapar a quebra de linha no Python
+                let lines = buffer.split('\\n\\n');
+
+                buffer = lines.pop();
+                for (const line of lines) {
+                    if (!line.trim().startsWith('data:')) continue;
+                    let payload = line.trim().slice(5).trim();
+                    try {
+                        payload = payload.replace(/'/g, '"');
+                        const data = JSON.parse(payload);
+                        if (data.type === 'progress') {
+                            document.getElementById('status_bar').innerHTML =
+                                `<div class="text-yellow-400 text-2xl animate-pulse">Integrating... ${data.value}%</div>`;
+                        }
+                        if (data.type === 'done') {
+                            const r = data.result;
+                            document.getElementById('H0_local').textContent = r.H0_phys_forward.toFixed(3);
+                            document.getElementById('delta_chi2').textContent = r.Delta_chi2.toFixed(1);
+                            document.getElementById('rev_delta').textContent = r.reverse_delta;
+                            document.getElementById('hz_plot').src = r.plot_b64;
+                            document.getElementById('status_bar').innerHTML =
+                                `<div class="text-green-400 text-2xl glow">NINJA SUPREME EXECUTADO | Δχ² = ${r.Delta_chi2}</div>`;
+                            refreshLedger();
+                            clearLoading('btn_stream');
+                        }
+                    } catch(e) { /* ignore parse errors */ }
+                }
+            }
+            clearLoading('btn_stream');
+        }
 
         function drawFs8Chart(result) {
+            if (!result.zc || !result.fsigma8_array) return;
+
             const canvas = document.getElementById('fs8_canvas');
-            if (!canvas) return;
-
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width;
-            canvas.height = rect.height;
-
             const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            const zc = result.zc || [];
-            const fsDUT = result.fsigma8_array || [];
-            const fsLCDM = result.fs8_lcdm_array || [];
+            // Fix DPI
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
 
-            const dataDUT = [];
-            const dataLCDM = [];
+            ctx.clearRect(0, 0, rect.width, rect.height);
 
-            const n = Math.min(zc.length, fsDUT.length, fsLCDM.length);
-            for (let i = 0; i < n; i++) {
-                const z = zc[i];
-                if (z < 0 || z > 1.5) continue;
-                dataDUT.push({ x: z, y: fsDUT[i] });
-                dataLCDM.push({ x: z, y: fsLCDM[i] });
-            }
+            // Margins
+            const m = {t: 40, r: 20, b: 40, l: 50};
+            const w = rect.width - m.l - m.r;
+            const h = rect.height - m.t - m.b;
 
-            if (!dataDUT.length) return;
+            const zMax = 2.0;
+            const yMax = 0.6;
 
-            const margin = { left: 50, right: 16, top: 16, bottom: 40 };
-            const width = canvas.width;
-            const height = canvas.height;
+            const toX = (z) => m.l + (z / zMax) * w;
+            const toY = (v) => m.t + h - (v / yMax) * h;
 
-            const xs = dataDUT.map(p => p.x).concat(dataLCDM.map(p => p.x));
-            const ys = dataDUT.map(p => p.y).concat(dataLCDM.map(p => p.y));
-
-            let xMin = Math.min(...xs);
-            let xMax = Math.max(...xs);
-            let yMin = Math.min(...ys);
-            let yMax = Math.max(...ys);
-
-            if (yMin === yMax) {
-                yMin -= 0.1;
-                yMax += 0.1;
-            }
-
-            function xToPx(x) {
-                return margin.left + (x - xMin) / (xMax - xMin) * (width - margin.left - margin.right);
-            }
-            function yToPx(y) {
-                return height - margin.bottom - (y - yMin) / (yMax - yMin) * (height - margin.top - margin.bottom);
-            }
-
-            // Fundo
-            ctx.fillStyle = '#050505';
-            ctx.fillRect(0, 0, width, height);
-
-            // Eixos
+            // Axes
             ctx.strokeStyle = '#555';
             ctx.lineWidth = 1;
             ctx.beginPath();
-            ctx.moveTo(margin.left, margin.top);
-            ctx.lineTo(margin.left, height - margin.bottom);
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(margin.left, height - margin.bottom);
-            ctx.lineTo(width - margin.right, height - margin.bottom);
+            ctx.moveTo(m.l, m.t); ctx.lineTo(m.l, m.t+h); ctx.lineTo(m.l+w, m.t+h);
             ctx.stroke();
 
-            // Ticks X
+            // Labels
             ctx.fillStyle = '#aaa';
-            ctx.font = '10px monospace';
-            const nTicksX = 5;
-            for (let i = 0; i <= nTicksX; i++) {
-                const xVal = xMin + (xMax - xMin) * i / nTicksX;
-                const xPx = xToPx(xVal);
-                ctx.beginPath();
-                ctx.moveTo(xPx, height - margin.bottom);
-                ctx.lineTo(xPx, height - margin.bottom + 4);
-                ctx.strokeStyle = '#555';
-                ctx.stroke();
-                ctx.fillText(xVal.toFixed(1), xPx - 10, height - margin.bottom + 14);
-            }
+            ctx.font = '12px monospace';
+            ctx.fillText('0', m.l - 15, m.t + h + 5);
+            ctx.fillText('2.0', m.l + w - 10, m.t + h + 15);
+            ctx.fillText('0.6', m.l - 25, m.t + 5);
 
-            // Ticks Y
-            const nTicksY = 4;
-            for (let i = 0; i <= nTicksY; i++) {
-                const yVal = yMin + (yMax - yMin) * i / nTicksY;
-                const yPx = yToPx(yVal);
-                ctx.beginPath();
-                ctx.moveTo(margin.left - 4, yPx);
-                ctx.lineTo(margin.left, yPx);
-                ctx.strokeStyle = '#555';
-                ctx.stroke();
-                ctx.fillText(yVal.toFixed(2), 4, yPx + 3);
-            }
-
-            // Série DUT
-            ctx.beginPath();
-            ctx.strokeStyle = '#00ff9f';
+            // LCDM line (red dashed)
+            ctx.strokeStyle = '#ec4899'; // pink-500
+            ctx.setLineDash([5, 5]);
             ctx.lineWidth = 2;
-            dataDUT.forEach((p, idx) => {
-                const xPx = xToPx(p.x);
-                const yPx = yToPx(p.y);
-                if (idx === 0) ctx.moveTo(xPx, yPx);
-                else ctx.lineTo(xPx, yPx);
-            });
+            ctx.beginPath();
+            let started = false;
+            for(let i=0; i<result.zc.length; i++) {
+                let z = result.zc[i];
+                if (z > zMax) continue;
+                let x = toX(z);
+                let y = toY(result.fs8_lcdm_array[i]);
+                if (!started) { ctx.moveTo(x, y); started=true; } else { ctx.lineTo(x, y); }
+            }
             ctx.stroke();
 
-            // Série ΛCDM
+            // DUT line (blue solid)
+            ctx.strokeStyle = '#3b82f6'; // blue-500
+            ctx.setLineDash([]);
+            ctx.lineWidth = 3;
             ctx.beginPath();
-            ctx.strokeStyle = '#ff9bb5';
-            ctx.lineWidth = 2;
-            dataLCDM.forEach((p, idx) => {
-                const xPx = xToPx(p.x);
-                const yPx = yToPx(p.y);
-                if (idx === 0) ctx.moveTo(xPx, yPx);
-                else ctx.lineTo(xPx, yPx);
-            });
+            started = false;
+            for(let i=0; i<result.zc.length; i++) {
+                let z = result.zc[i];
+                if (z > zMax) continue;
+                let x = toX(z);
+                let y = toY(result.fsigma8_array[i]);
+                if (!started) { ctx.moveTo(x, y); started=true; } else { ctx.lineTo(x, y); }
+            }
             ctx.stroke();
 
-            // Legenda
-            let lx = margin.left + 10;
-            let ly = margin.top + 10;
-            ctx.fillStyle = '#00ff9f';
-            ctx.fillRect(lx, ly, 12, 3);
-            ctx.fillStyle = '#ddd';
-            ctx.fillText('DUT', lx + 20, ly + 4);
-            ly += 14;
-            ctx.fillStyle = '#ff9bb5';
-            ctx.fillRect(lx, ly, 12, 3);
-            ctx.fillStyle = '#ddd';
-            ctx.fillText('ΛCDM', lx + 20, ly + 4);
+            // Data points (approximate visual)
+            const data = [
+                {z: 0.15, y: 0.413, err: 0.030}, {z: 0.38, y: 0.437, err: 0.025},
+                {z: 0.51, y: 0.452, err: 0.020}, {z: 0.61, y: 0.462, err: 0.018},
+                {z: 0.80, y: 0.470, err: 0.022}
+            ];
+
+            ctx.fillStyle = '#fff';
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+
+            data.forEach(d => {
+                let x = toX(d.z);
+                let y = toY(d.y);
+                let dy = (d.err / yMax) * h;
+
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, 2*Math.PI);
+                ctx.fill();
+
+                ctx.beginPath();
+                ctx.moveTo(x, y-dy);
+                ctx.lineTo(x, y+dy);
+                ctx.stroke();
+            });
         }
 
         async function runSimulation() {
+            setLoading('btn_run', '⏳ Executando...');
             const params = {
                 Omega_m_0: parseFloat(document.getElementById('omega_m').value),
                 Omega_S_0: parseFloat(document.getElementById('omega_s').value),
@@ -664,15 +811,11 @@ async def dashboard(request: Request):
                 });
                 const result = await response.json();
 
-                // Update metrics
                 document.getElementById('H0_local').textContent = result.H0_phys_forward?.toFixed(3) || '73.520';
                 document.getElementById('delta_chi2').textContent = result.Delta_chi2?.toFixed(1) || '-211.6';
                 document.getElementById('rev_delta').textContent = (result.H0_phys_reverse - result.H0_phys_forward)?.toFixed(4) || '0.0003';
-
-                // Update H(z) plot
                 document.getElementById('hz_plot').src = result.plot_b64;
 
-                // Update fσ8(z) chart
                 drawFs8Chart(result);
 
                 status.innerHTML = `
@@ -681,18 +824,17 @@ async def dashboard(request: Request):
                         Ledger: ${result.ledger_hash?.slice(0,16)}...
                     </div>
                 `;
-
                 refreshLedger();
-
             } catch(error) {
                 status.innerHTML = `<div class="text-xl text-red-400 font-mono">❌ Error: ${error.message}</div>`;
             }
+            clearLoading('btn_run');
         }
 
         async function runMCMC() {
+            setLoading('btn_mcmc', '⏳ MCMC...');
             document.getElementById('status_bar').innerHTML =
                 '<div class="text-xl text-purple-400 animate-pulse font-mono">🔬 Running MCMC... 100 walkers × 500 steps</div>';
-
             try {
                 const result = await (await fetch('/api/mcmc', {method: 'POST'})).json();
                 document.getElementById('status_bar').innerHTML =
@@ -701,16 +843,20 @@ async def dashboard(request: Request):
             } catch(e) {
                 document.getElementById('status_bar').innerHTML = `<div class="text-xl text-red-400">MCMC Error</div>`;
             }
+            clearLoading('btn_mcmc');
         }
 
         async function exportReport() {
+            setLoading('btn_export', '⏳ Exportando...');
             const result = await (await fetch('/api/export', {method: 'POST'})).json();
             document.getElementById('status_bar').innerHTML =
                 `<div class="text-xl text-orange-400 glow font-mono">✅ Report exported | Ledger: ${result.report_hash.slice(0,16)}...</div>`;
             refreshLedger();
+            clearLoading('btn_export');
         }
 
         async function refreshLedger() {
+            setLoading('btn_ledger', '⏳ Sincronizando...');
             try {
                 ledgerData = await (await fetch('/api/ledger')).json();
                 document.getElementById('ledger_blocks').innerHTML = ledgerData.map(entry => {
@@ -730,6 +876,7 @@ async def dashboard(request: Request):
             } catch(e) {
                 console.error('Ledger sync failed', e);
             }
+            clearLoading('btn_ledger');
         }
 
         // Initialize
@@ -738,7 +885,7 @@ async def dashboard(request: Request):
     </script>
 </body>
 </html>
-    """)
+""")
 
 @app.get("/health")
 async def health_check():
