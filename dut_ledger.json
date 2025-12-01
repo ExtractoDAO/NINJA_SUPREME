@@ -1,0 +1,58 @@
+[
+  {
+    "data": {
+      "type": "RESEARCH_REPORT",
+      "timestamp": 1764608948.794215
+    },
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "timestamp": 1764608948.794217,
+    "hash": "dd25b03667cab6d2e22aea3ea8f5d51740f90188542fbe63b244b4bb8d55119a"
+  },
+  {
+    "data": {
+      "type": "MCMC_RUN",
+      "samples_count": 40000
+    },
+    "prev_hash": "dd25b03667cab6d2e22aea3ea8f5d51740f90188542fbe63b244b4bb8d55119a",
+    "timestamp": 1764608951.7656474,
+    "hash": "33cf22cd4e370c8dd33454744172374817e6ff36d1f16d09e2a4baac27c33262"
+  },
+  {
+    "data": {
+      "type": "SIMULATION_RUN",
+      "params": {
+        "Omega_m_0": 0.301,
+        "Omega_S_0": 0.649,
+        "xi_patch": 0.102,
+        "lambda_phi": 1.18,
+        "sigma8_0": 0.774
+      },
+      "H0_phys_forward": 73.52,
+      "H0_phys_reverse": 73.53212713464883,
+      "Delta_chi2": -81.68245708204101,
+      "lnB": 40.841228541020506
+    },
+    "prev_hash": "33cf22cd4e370c8dd33454744172374817e6ff36d1f16d09e2a4baac27c33262",
+    "timestamp": 1764608960.1468165,
+    "hash": "12da26f43f6c97cfe1a3c1afd800c75dbe61d013a0a30f22a90e177f6b72cc94"
+  },
+  {
+    "data": {
+      "type": "SIMULATION_RUN",
+      "params": {
+        "Omega_m_0": 1.0,
+        "Omega_S_0": 0.649,
+        "xi_patch": 0.102,
+        "lambda_phi": 1.18,
+        "sigma8_0": 0.774
+      },
+      "H0_phys_forward": 73.52,
+      "H0_phys_reverse": 73.53212713464883,
+      "Delta_chi2": -81.68245708204101,
+      "lnB": 40.841228541020506
+    },
+    "prev_hash": "12da26f43f6c97cfe1a3c1afd800c75dbe61d013a0a30f22a90e177f6b72cc94",
+    "timestamp": 1764608967.1425858,
+    "hash": "5152034b352dcd3c2e9231d42f82bb0b3f519d55d5c84aeb304e5a7aea566cdd"
+  }
+]
