@@ -491,6 +491,14 @@ async def dashboard(request: Request):
             100% { background-position: 0% 50%; }
         }
     </style>
+
+    <script>
+fetch('https://api.countapi.xyz/hit/ninjasupreme2025/visits')
+  .then(res => res.json())
+  .then(data => {
+    document.getElementById('live_count').textContent = data.value;
+  });
+</script>
 </head>
 <body class="cyber-bg text-white min-h-screen font-mono">
     <div class="container mx-auto px-6 py-12 max-w-7xl">
