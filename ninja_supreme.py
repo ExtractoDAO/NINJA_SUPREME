@@ -37,9 +37,6 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# =============================================================================
-# OBSERVATIONAL DATA
-# =============================================================================
 Hz_data_z = np.array([0.07, 0.17, 0.27, 0.40, 0.57, 0.73, 1.00, 1.50])
 Hz_data   = np.array([69.0, 83.0, 77.0, 95.0, 96.0, 97.0, 120.0, 160.0])
 Hz_sigma  = np.array([19.0,  8.0, 14.0, 17.0, 17.0,  8.0,  17.0,  20.0])
@@ -48,16 +45,13 @@ fs8_data_z = np.array([0.15, 0.38, 0.51, 0.61, 0.80])
 fs8_data   = np.array([0.413, 0.437, 0.452, 0.462, 0.470])
 fs8_sigma  = np.array([0.030, 0.025, 0.020, 0.018, 0.022])
 
-# COSMOLOGICAL PARAMETERS
 H0_fid = 70.0
 Omega_k_0 = -0.069
 Gamma_S = 0.958
 
-# Patch parameters (usados no sistema corrigido)
 Omega_k_0_patch = Omega_k_0
 Gamma_S_patch = Gamma_S
 
-# Global state
 ledger: List[Dict] = []
 chi2_DUT_global = chi2_LCDM_global = Delta_chi2_global = lnB_global = None
 solution_cache = {}
@@ -69,9 +63,6 @@ class CosmoParams(BaseModel):
     lambda_phi: float = 1.18
     sigma8_0: float = 0.774
 
-# =============================================================================
-# CORE PHYSICS ENGINE (100% preserved from original, com pequenos fixes)
-# =============================================================================
 
 @numba.jit(nopython=True)
 def dut_system_numba(N: float, Y: np.ndarray) -> np.ndarray:
@@ -154,13 +145,11 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     global Omega_m_0, Omega_S_0, Omega_k_0_patch, Gamma_S_patch
     global lambda_phi, xi_patch, sigma8_0, chi2_DUT_global
 
-    # Update global parameters
     Omega_m_0, Omega_S_0, xi_patch, lambda_phi, sigma8_0 = (
         params.Omega_m_0, params.Omega_S_0, params.xi_patch,
         params.lambda_phi, params.sigma8_0
     )
 
-    # Forward integration N = -9 → 20
     N_points = 5000
     N = np.linspace(-9, 20, N_points)
     dN = N[1] - N[0]
@@ -172,7 +161,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     for i in range(1, N_points):
         sol[i] = rk4_step(N[i-1], sol[i-1], dN, dut_patch_system)
 
-    # Compute H(z), physical scaling, fσ8, S8
     x, y, u, z = sol.T
     a = np.exp(np.clip(N, -10, 20))
     zc = 1/a - 1
@@ -188,7 +176,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     H_phys = H_raw * scale_H
     H0_phys_forward = float(H_phys[idx0])
 
-    # fσ8 and growth suppression
     G_eff = 1.0 / (1.0 + np.clip(xi_patch * np.maximum(z, 0.0) / 3.0, 0.0, 10.0))
     suppression = np.where(zc > 0, 1.0 - 0.3 * G_eff, 1.0)
     dlnsigma8_dN = -0.5 * (1.0 - np.sqrt(np.sqrt(np.clip(G_eff, 1e-8, 10.0))))
@@ -203,14 +190,11 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     f_growth = suppression * np.clip(Om_mN**0.55, 0.0, 2.0) * np.sqrt(np.clip(G_eff, 1e-8, 10.0))
     fsigma8 = f_growth * sigma8
 
-    # ΛCDM comparison – agora normalizado com H0_phys_forward correto
     H_lcdm = H0_phys_forward * np.sqrt(0.3*(1+zc)**3 + 0.7)
     fs8_lcdm = 0.47 * (1/(1+zc))**0.9
 
-    # χ² statistics
     chi2_DUT, chi2_LCDM, Delta_chi2, lnB = compute_chi2(zc, H_phys, H_lcdm, fsigma8, fs8_lcdm)
 
-    # Reverse integration check
     Y_end = sol[-1].copy()
     N_rev = np.linspace(20, -9, N_points)
     dN_rev = N_rev[1] - N_rev[0]
@@ -229,7 +213,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     H0_raw_reverse = H_rev_raw[np.argmin(np.abs(1/a_r - 1))]
     H0_phys_reverse = H0_raw_reverse * scale_H
 
-    # Generate plot H(z)
     plt.figure(figsize=(12, 8))
     z_mask = zc < 2
     z_plot = zc[z_mask]
@@ -245,7 +228,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
     plot_b64 = base64.b64encode(buf.read()).decode()
     plt.close()
 
-    # Ledger entry (corrigido H0_phys_forward)
     entry_hash = add_ledger_entry({
         "type": "SIMULATION_RUN",
         "params": params.dict(),
@@ -255,7 +237,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
         "lnB": float(lnB)
     })
 
-    # Retorno enriquecido com arrays para o gráfico de fσ8
     return {
         "H0_phys_forward": float(H0_phys_forward),
         "H0_phys_reverse": float(H0_phys_reverse),
@@ -268,7 +249,6 @@ def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
         "plot_b64": f"data:image/png;base64,{plot_b64}",
         "ledger_hash": entry_hash,
         "status": "SIMULATION COMPLETE",
-        # para o gráfico fσ8(z)
         "zc": zc.tolist(),
         "fsigma8_array": fsigma8.tolist(),
         "fs8_lcdm_array": fs8_lcdm.tolist()
@@ -288,22 +268,14 @@ def add_ledger_entry(data: Dict) -> str:
     ).hexdigest()
     ledger.append(entry)
 
-    # Persist to disk
     with open("dut_ledger.json", "w") as f:
         json.dump(ledger, f, indent=2)
 
     return entry['hash']
 
-# =============================================================================
-# FASTAPI ENDPOINTS
-# =============================================================================
 
-# -----------------------------------------------------------------------------
-# REAL-TIME STREAMING SIMULATION ENDPOINT
-# -----------------------------------------------------------------------------
 async def simulation_generator(params: CosmoParams):
 
-    # Corrige: define os parâmetros globais para uso no dut_patch_system
     global Omega_m_0, Omega_S_0, xi_patch, lambda_phi, sigma8_0
     Omega_m_0 = params.Omega_m_0
     Omega_S_0 = params.Omega_S_0
@@ -331,8 +303,6 @@ async def simulation_generator(params: CosmoParams):
             await asyncio.sleep(0)
         Y = rk4_step(N[i-1], Y, dN, dut_patch_system)
 
-    # --- After integration, run the rest of the calculations (copied from run_dut_simulation) ---
-    # Compute H(z), physical scaling, fσ8, S8
     x = Y[0]
     y = Y[1]
     u = Y[2]
@@ -351,14 +321,11 @@ async def simulation_generator(params: CosmoParams):
     H_phys = H_raw * scale_H
     H0_phys_forward = float(H_phys[idx0])
 
-    # ΛCDM comparison
     H_lcdm = H0_phys_forward * np.sqrt(0.3*(1+zc)**3 + 0.7)
     fs8_lcdm = 0.47 * (1/(1+zc))**0.9
 
-    # χ² statistics
     chi2_DUT, chi2_LCDM, Delta_chi2, lnB = compute_chi2(zc, H_phys, H_lcdm, np.zeros_like(zc), fs8_lcdm)
 
-    # Reverse integration check
     Y_end = Y.copy()
     N_rev = np.linspace(20, -9, N_points)
     dN_rev = N_rev[1] - N_rev[0]
@@ -375,7 +342,6 @@ async def simulation_generator(params: CosmoParams):
     H0_raw_reverse = H_rev_raw[np.argmin(np.abs(1/a_r - 1))]
     H0_phys_reverse = H0_raw_reverse * scale_H
 
-    # Generate plot H(z)
     plt.figure(figsize=(12, 8))
     z_mask = zc < 2
     z_plot = zc[z_mask]
@@ -463,13 +429,9 @@ async def export_report() -> Dict[str, Any]:
     })
     return {"report_hash": hash_block, "ledger_size": len(ledger)}
 
-# =============================================================================
-# CLEAN CYBERPUNK FRONTEND (com gráfico fσ₈ em canvas)
-# =============================================================================
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    # Usamos uma string crua (r"...") ou escapamos manualmente as barras
     return HTMLResponse(content=r"""
 <!DOCTYPE html>
 <html lang="en">
