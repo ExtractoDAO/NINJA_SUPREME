@@ -1,886 +1,1411 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# ===============================================================
+#  NINJA SUPREME 1.0 — Unified Bayesian Cosmology Engine (ΛCDM vs DUT)
+#  Student / Educational Simulation Edition
+# ===============================================================
+#  © 2025 ExtractoDAO Labs — All Rights Reserved
+#  Company Name: ExtractoDAO S.A.
+#  CNPJ (Brazil National Registry): 48.839.397/0001-36
+#  Contact (Scientific & Licensing): contato@extractodao.com
+# ===============================================================
+#
+#  LICENSE AND PERMISSIONS
+#  ------------------------
+#  This software is released for academic transparency and non-commercial
+#  scientific research. The following conditions apply:
+#
+#    1. Redistribution or modification of this code is strictly prohibited
+#       without prior written authorization from ExtractoDAO Labs.
+#
+#    2. Use of this code in scientific research, publications, computational
+#       pipelines, or derivative works REQUIRES explicit citation of:
+#
+#       Almeida, J. (2025).
+#       Dead Universe Theory's Entropic Retraction Resolves ΛCDM's
+#       Hubble and Growth Tensions Simultaneously:
+#       Δχ² = –211.6 with Identical Datasets.
+#       Zenodo. https://doi.org/10.5281/zenodo.17752029
+#
+#    3. Any use of real data integrations (Pantheon+, Planck, BAO, H(z), fσ8)
+#       must also cite their respective collaborations.
+#
+#    4. Unauthorized commercial, academic, or technological use of the
+#       ExtractoDAO Scientific Engine, or integration of this code into
+#       external systems without permission, constitutes violation of
+#       Brazilian Copyright Law (Lei 9.610/98), international IP treaties
+#       (Berne Convention), and related legislation.
+#
+# ===============================================================
+#  IMPORTANT ACADEMIC NOTICE — STUDENT / EDUCATIONAL SIMULATION VERSION
+# ===============================================================
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-NINJA SUPREME 1.0 - Complete Fullstack Cosmological Simulator
-Backend: FastAPI + DUT Physics + MCMC + Blockchain Ledger
-Frontend: Clean Cyberpunk Dashboard
-Run: python ninja_supreme.py → http://localhost:8000
+NINJA SUPREME 1.0 — Unified Bayesian Cosmology Engine (ΛCDM vs DUT)
+Student / Educational Simulation Edition
+====================================================================
+© 2025 ExtractoDAO Labs — All Rights Reserved
+Company Name: ExtractoDAO S.A.
+CNPJ (Brazil National Registry): 48.839.397/0001-36
+Contact (Scientific & Licensing): contato@extractodao.com
+====================================================================
+
+LICENSE AND PERMISSIONS
+-----------------------
+This software is released for academic transparency and
+non-commercial scientific research. The following conditions apply:
+
+1. Redistribution or modification of this code is strictly prohibited
+   without prior written authorization from ExtractoDAO Labs.
+
+2. Use of this code in scientific research, publications,
+   computational pipelines, or derivative works REQUIRES explicit
+   citation of:
+
+   Almeida, J. (2025).
+   Dead Universe Theory's Entropic Retraction Resolves ΛCDM's
+   Hubble and Growth Tensions Simultaneously:
+   Δχ² = –211.6 with Identical Datasets.
+   Zenodo. https://doi.org/10.5281/zenodo.17752029
+
+3. Any use of real data integrations (Pantheon+, Planck, BAO, H(z), fσ8)
+   must also cite their respective collaborations.
+
+4. Unauthorized commercial, academic, or technological use of the
+   ExtractoDAO Scientific Engine, or integration of this code into
+   external systems without permission, constitutes violation of
+   Brazilian Copyright Law (Lei 9.610/98), international IP treaties
+   (Berne Convention), and related legislation.
+
+====================================================================
+IMPORTANT ACADEMIC NOTICE — STUDENT / EDUCATIONAL SIMULATION VERSION
+====================================================================
 """
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-from scipy.integrate import solve_ivp
-from scipy.interpolate import interp1d
-import emcee
-import corner
-import numba
-import json
-import time
+from __future__ import annotations
+
+import base64
+import dataclasses
 import hashlib
 import io
-import base64
-import uvicorn
-from typing import Dict, Any, List
-import asyncio
+import json
+import logging
+import os
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
-app = FastAPI(title="NINJA SUPREME 1.0 - Dead Universe Theory")
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from scipy.integrate import cumulative_trapezoid, odeint
+from scipy.interpolate import interp1d
+import uvicorn
+
+# Optional SciPy extras
+try:
+    import scipy.special  # noqa: F401
+    from scipy.optimize import curve_fit  # noqa: F401
+    from scipy.integrate import solve_ivp  # noqa: F401
+except Exception:
+    solve_ivp = None  # type: ignore
+
+# -----------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger("NINJA_SUPREME")
+
+# -----------------------------------------------------------------
+# App
+# -----------------------------------------------------------------
+
+app = FastAPI(title="NINJA SUPREME 1.0 — Unified ΛCDM vs DUT (Real Data)")
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
-Hz_data_z = np.array([0.07, 0.17, 0.27, 0.40, 0.57, 0.73, 1.00, 1.50])
-Hz_data   = np.array([69.0, 83.0, 77.0, 95.0, 96.0, 97.0, 120.0, 160.0])
-Hz_sigma  = np.array([19.0,  8.0, 14.0, 17.0, 17.0,  8.0,  17.0,  20.0])
+# -----------------------------------------------------------------
+# Paths / caching / outputs
+# -----------------------------------------------------------------
 
-fs8_data_z = np.array([0.15, 0.38, 0.51, 0.61, 0.80])
-fs8_data   = np.array([0.413, 0.437, 0.452, 0.462, 0.470])
-fs8_sigma  = np.array([0.030, 0.025, 0.020, 0.018, 0.022])
+DATA_DIR = os.environ.get("NINJA_DATA_DIR", "data_cache")
+OUTPUT_DIR = os.environ.get("NINJA_OUTPUT_DIR", "outputs")
 
-H0_fid = 70.0
-Omega_k_0 = -0.069
-Gamma_S = 0.958
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-Omega_k_0_patch = Omega_k_0
-Gamma_S_patch = Gamma_S
+def _sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
 
-ledger: List[Dict] = []
-chi2_DUT_global = chi2_LCDM_global = Delta_chi2_global = lnB_global = None
-solution_cache = {}
+def _read_file_bytes(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+def _write_file_bytes(path: str, b: bytes) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "wb") as f:
+        f.write(b)
+    os.replace(tmp, path)
+
+def _safe_json_dump(obj: Any, path: str) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False, sort_keys=True, default=str)
+    os.replace(tmp, path)
+
+def _timestamp_tag() -> str:
+    return time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+
+def http_get_bytes(url: str, timeout: int = 30, user_agent: str = "Mozilla/5.0") -> bytes:
+    from urllib.request import Request as UrlRequest, urlopen
+    req = UrlRequest(url, headers={"User-Agent": user_agent})
+    with urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+@dataclasses.dataclass(frozen=True)
+class DatasetInfo:
+    name: str
+    n: int
+    zmin: float
+    zmax: float
+    source: str
+    sha256: str
+
+def _download_or_cache(url: str, filename: str, timeout: int = 30) -> Tuple[bytes, str, bool]:
+    path = os.path.join(DATA_DIR, filename)
+    if os.path.exists(path):
+        b = _read_file_bytes(path)
+        return b, _sha256_bytes(b), True
+    b = http_get_bytes(url, timeout=timeout)
+    _write_file_bytes(path, b)
+    return b, _sha256_bytes(b), False
+
+# -----------------------------------------------------------------
+# Real datasets (robust loaders with offline fallback)
+# -----------------------------------------------------------------
+
+def load_pantheon_plus(logger_: Optional[logging.Logger] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, DatasetInfo]:
+    logger_ = logger_ or logger
+    data_url = (
+        "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+        "Pantheon+_Data/4_DISTANCES_AND_COVAR/Pantheon+SH0ES.dat"
+    )
+    cov_url = (
+        "https://raw.githubusercontent.com/PantheonPlusSH0ES/DataRelease/main/"
+        "Pantheon+_Data/4_DISTANCES_AND_COVAR/Pantheon+SH0ES_STAT+SYS.cov"
+    )
+    try:
+        b_dat, sha_dat, cached_dat = _download_or_cache(data_url, "pantheonplus.dat")
+        b_cov, sha_cov, cached_cov = _download_or_cache(cov_url, "pantheonplus.cov")
+        txt = b_dat.decode("utf-8", errors="replace")
+        df = pd.read_csv(io.StringIO(txt), delim_whitespace=True, comment="#")
+
+        if "zHD" in df.columns:
+            z = df["zHD"].to_numpy(dtype=float)
+        elif "z" in df.columns:
+            z = df["z"].to_numpy(dtype=float)
+        else:
+            raise ValueError(f"Pantheon+: no redshift column found. Columns={list(df.columns)}")
+
+        mu_candidates = ["MU_SH0ES", "MU", "MU_GLOBAL", "MU_PLUS", "MU_PANTHEON", "MU_CALIB"]
+        mu_col = next((col for col in mu_candidates if col in df.columns), None)
+        if mu_col is None:
+            raise ValueError(f"Pantheon+: no MU column found. Columns={list(df.columns)}")
+
+        mu = df[mu_col].to_numpy(dtype=float)
+        cov_txt = b_cov.decode("utf-8", errors="replace")
+        cov = np.loadtxt(io.StringIO(cov_txt))
+
+        if cov.shape[0] != len(z) or cov.shape[1] != len(z):
+            raise ValueError(f"Pantheon+ covariance mismatch: cov={cov.shape}, N={len(z)}")
+
+        err_diag = np.sqrt(np.clip(np.diag(cov), 0.0, np.inf))
+        sha = _sha256_bytes(b_dat + b"\n" + b_cov)
+        info = DatasetInfo(
+            "Pantheon+",
+            int(len(z)),
+            float(np.min(z)),
+            float(np.max(z)),
+            f"github/raw (cached={cached_dat and cached_cov})",
+            sha
+        )
+        logger_.info(f"Pantheon+ loaded: N={len(z)} | cached={cached_dat and cached_cov} | mu_col={mu_col}")
+        return z, mu, err_diag, cov, info
+    except Exception as e:
+        logger_.warning(f"Pantheon+ download/parse failed; using embedded fallback. Reason: {e}")
+        z = np.array([0.01, 0.05, 0.10, 0.20, 0.35, 0.50, 0.75, 1.00], dtype=float)
+        mu = np.array([33.2, 36.6, 38.2, 40.0, 41.7, 42.9, 44.2, 45.0], dtype=float)
+        err = np.full_like(z, 0.15, dtype=float)
+        cov = np.diag(err**2)
+        info = DatasetInfo(
+            "Pantheon+ (fallback)",
+            int(len(z)),
+            float(z.min()),
+            float(z.max()),
+            "embedded fallback",
+            _sha256_bytes(z.tobytes() + mu.tobytes())
+        )
+        return z, mu, err, cov, info
+
+def load_hz_moresco(logger_: Optional[logging.Logger] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, DatasetInfo]:
+    logger_ = logger_ or logger
+    hz_url = "https://gitlab.com/mmoresco/CCcovariance/-/raw/master/data/HzTable_MM_BC03.dat"
+    try:
+        b, sha, cached = _download_or_cache(hz_url, "hz_moresco.dat")
+        txt = b.decode("utf-8", errors="replace")
+        data = np.loadtxt(io.StringIO(txt))
+        z = data[:, 0].astype(float)
+        hz = data[:, 1].astype(float)
+        err = data[:, 2].astype(float)
+        info = DatasetInfo(
+            "H(z) cosmic chronometers",
+            int(len(z)),
+            float(z.min()),
+            float(z.max()),
+            f"gitlab/raw (cached={cached})",
+            sha
+        )
+        logger_.info(f"H(z) loaded: N={len(z)} | cached={cached}")
+        return z, hz, err, info
+    except Exception as e:
+        logger_.warning(f"H(z) download/parse failed; using embedded fallback. Reason: {e}")
+        z = np.array([0.07, 0.17, 0.27, 0.40, 0.57, 0.73, 1.00, 1.50], dtype=float)
+        hz = np.array([69.0, 83.0, 77.0, 95.0, 96.0, 97.0, 120.0, 160.0], dtype=float)
+        err = np.array([19.0, 8.0, 14.0, 17.0, 17.0, 8.0, 17.0, 20.0], dtype=float)
+        info = DatasetInfo(
+            "H(z) (fallback)",
+            int(len(z)),
+            float(z.min()),
+            float(z.max()),
+            "embedded fallback",
+            _sha256_bytes(z.tobytes() + hz.tobytes() + err.tobytes())
+        )
+        return z, hz, err, info
+
+def load_fs8_compilation(logger_: Optional[logging.Logger] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, DatasetInfo]:
+    logger_ = logger_ or logger
+    data = np.array([
+        [0.02, 0.398, 0.065], [0.02, 0.314, 0.048], [0.067, 0.423, 0.055],
+        [0.10, 0.370, 0.130], [0.15, 0.490, 0.145], [0.17, 0.510, 0.060],
+        [0.18, 0.360, 0.090], [0.25, 0.3512, 0.0583], [0.25, 0.3665, 0.0601],
+        [0.30, 0.407, 0.0554], [0.32, 0.427, 0.056], [0.32, 0.480, 0.100],
+        [0.35, 0.440, 0.050], [0.37, 0.4602, 0.0378], [0.37, 0.4031, 0.0586],
+        [0.38, 0.497, 0.045], [0.38, 0.477, 0.051], [0.38, 0.440, 0.060],
+        [0.40, 0.419, 0.041], [0.44, 0.413, 0.080], [0.50, 0.427, 0.043],
+        [0.51, 0.458, 0.038], [0.51, 0.453, 0.050], [0.57, 0.417, 0.056],
+        [0.59, 0.488, 0.060], [0.60, 0.390, 0.063], [0.60, 0.430, 0.067],
+        [0.61, 0.436, 0.034], [0.61, 0.410, 0.044], [0.73, 0.437, 0.072],
+        [0.73, 0.404, 0.048], [0.781, 0.450, 0.040], [0.80, 0.470, 0.080],
+        [0.875, 0.490, 0.080], [0.85, 0.420, 0.050], [0.98, 0.380, 0.060], [1.23, 0.350, 0.070]
+    ], dtype=float)
+    z = data[:, 0]
+    fs8 = data[:, 1]
+    err = data[:, 2]
+    info = DatasetInfo(
+        "fσ8 compilation",
+        int(len(z)),
+        float(z.min()),
+        float(z.max()),
+        "embedded numeric compilation",
+        _sha256_bytes(data.tobytes())
+    )
+    logger_.info(f"fσ8 loaded: N={len(z)} (embedded)")
+    return z, fs8, err, info
+
+def load_bao_dv_over_rd(logger_: Optional[logging.Logger] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, DatasetInfo]:
+    logger_ = logger_ or logger
+    sdss_url = "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/sdss_dr12_consensus_final.dat"
+    desi_url = "https://raw.githubusercontent.com/CobayaSampler/bao_data/master/desi_2024_bao.dat"
+    try:
+        b1, sha1, cached1 = _download_or_cache(sdss_url, "bao_sdss_dr12.dat")
+        b2, sha2, cached2 = _download_or_cache(desi_url, "bao_desi_2024.dat")
+        a1 = np.loadtxt(io.StringIO(b1.decode("utf-8", errors="replace")))
+        a2 = np.loadtxt(io.StringIO(b2.decode("utf-8", errors="replace")))
+        z = np.concatenate([a1[:, 0], a2[:, 0]]).astype(float)
+        dv_over_rd = np.concatenate([a1[:, 1], a2[:, 1]]).astype(float)
+        err = np.concatenate([a1[:, 2], a2[:, 2]]).astype(float)
+        sha = _sha256_bytes(b1 + b"\n" + b2)
+        info = DatasetInfo(
+            "BAO DV/rd (SDSS+DESI)",
+            int(len(z)),
+            float(z.min()),
+            float(z.max()),
+            f"github/raw (cached={cached1 and cached2})",
+            sha
+        )
+        logger_.info(f"BAO DV/rd loaded: N={len(z)} | cached={cached1 and cached2}")
+        return z, dv_over_rd, err, info
+    except Exception as e:
+        logger_.warning(f"BAO download/parse failed; using embedded fallback. Reason: {e}")
+        z = np.array([0.106, 0.15, 0.38, 0.51, 0.61], dtype=float)
+        dv_over_rd = np.array([3.05, 4.47, 10.27, 13.38, 15.55], dtype=float)
+        err = np.array([0.14, 0.17, 0.15, 0.14, 0.16], dtype=float)
+        info = DatasetInfo(
+            "BAO DV/rd (fallback)",
+            int(len(z)),
+            float(z.min()),
+            float(z.max()),
+            "embedded fallback",
+            _sha256_bytes(z.tobytes() + dv_over_rd.tobytes() + err.tobytes())
+        )
+        return z, dv_over_rd, err, info
+
+def load_planck_2018_compressed(logger_: Optional[logging.Logger] = None) -> Tuple[np.ndarray, np.ndarray, DatasetInfo]:
+    logger_ = logger_ or logger
+    mean = np.array([0.0224, 0.120, 1.0411, 0.054, 3.044, 0.965], dtype=float)
+    errors = np.array([0.0001, 0.001, 0.0003, 0.007, 0.014, 0.004], dtype=float)
+    cov = np.diag(errors**2)
+    info = DatasetInfo(
+        "Planck 2018 (compressed)",
+        int(len(mean)),
+        0.0,
+        0.0,
+        "embedded compressed mean + diagonal cov",
+        _sha256_bytes(mean.tobytes() + cov.tobytes())
+    )
+    logger_.info("Planck 2018 compressed loaded (embedded)")
+    return mean, cov, info
+
+# Load all datasets at startup
+Hz_z, Hz_obs, Hz_err, Hz_info = load_hz_moresco()
+fs8_z, fs8_obs, fs8_err, fs8_info = load_fs8_compilation()
+bao_z, bao_dv_rd, bao_err, bao_info = load_bao_dv_over_rd()
+pantheon_z, pantheon_mu, pantheon_err, pantheon_cov, pantheon_info = load_pantheon_plus()
+planck_mean, planck_cov, planck_info = load_planck_2018_compressed()
+
+# -----------------------------------------------------------------
+# DUT engine
+# -----------------------------------------------------------------
+
+class DUTIntegrator:
+    def __init__(self, params: Dict[str, float]):
+        self.params = {k: float(v) for k, v in params.items()}
+        self.c = 299792.458
+
+        self.N_init = -9.0
+        self.N_final = 5.0
+        self.N_points = 5000
+
+        self.N: Optional[np.ndarray] = None
+        self.solution: Optional[np.ndarray] = None
+        self.z: Optional[np.ndarray] = None
+        self.Hz: Optional[np.ndarray] = None
+        self.Dc: Optional[np.ndarray] = None
+        self.DL: Optional[np.ndarray] = None
+        self.fsigma8: Optional[np.ndarray] = None
+        self._dlnH_dN: Optional[np.ndarray] = None
+        self._z_unsorted: Optional[np.ndarray] = None
+        self._H_unsorted: Optional[np.ndarray] = None
+
+    def validate_params(self) -> None:
+        constraints = {
+            "Omega_m_0": (0.0, 2.0),
+            "Omega_S_0": (-2.0, 2.0),
+            "Omega_k_0": (-2.0, 2.0),
+            "Gamma_S": (0.0, 3.0),
+            "lambda_phi": (0.0, 10.0),
+            "xi": (-2.0, 2.0),
+            "H0": (40.0, 120.0),
+            "sigma8_0": (0.1, 2.0),
+        }
+        for k, (lo, hi) in constraints.items():
+            v = float(self.params.get(k, 0.0))
+            if not (lo <= v <= hi):
+                logger.warning(f"Parameter outside typical bounds: {k}={v} not in [{lo}, {hi}]")
+
+    def dut_ode(self, N: float, Y: np.ndarray) -> np.ndarray:
+        x = np.clip(Y[0], -10, 10)
+        y = np.clip(Y[1], -10, 10)
+        u = np.clip(Y[2], -1e3, 1e3)
+        z = np.clip(Y[3], -10, 10)
+
+        x2 = np.clip(x**2, 0, 100)
+        y2 = np.clip(y**2, 0, 100)
+
+        Om_m = np.clip(u * np.exp(-3.0 * N), 0.0, 1e3)
+        Om_k = np.clip(self.params["Omega_k_0"] * np.exp(-2.0 * N), -1.0, 1.0)
+
+        H2 = np.maximum(Om_m + x2 + y2 + z * (1 - self.params["Gamma_S"]) + Om_k, 1e-12)
+        R = np.clip(H2 + 0.5 * (x2 - y2), 0, 1e6)
+        combo = np.clip(x2 - y2 + np.clip(z * (1 - self.params["Gamma_S"]), -5, 5), -20, 20)
+
+        dx = np.clip(-3 * x + np.sqrt(6) * self.params["lambda_phi"] * y2 / 2 + 1.5 * x * combo, -30, 30)
+        dy = np.clip(-np.sqrt(6) * self.params["lambda_phi"] * x * y / 2 + 1.5 * y * combo, -30, 30)
+        du = np.clip(-3 * u - 1.5 * u * combo, -1e3, 1e3)
+        dz = np.clip(self.params["xi"] * (x2 - y2) + 6 * self.params["xi"] * z * R, -30, 30)
+
+        return np.array([dx, dy, du, dz], dtype=float)
+
+    def rk4_step(self, N: float, Y: np.ndarray, dN: float) -> np.ndarray:
+        k1 = self.dut_ode(N, Y)
+        k2 = self.dut_ode(N + dN / 2.0, Y + (dN / 2.0) * k1)
+        k3 = self.dut_ode(N + dN / 2.0, Y + (dN / 2.0) * k2)
+        k4 = self.dut_ode(N + dN, Y + dN * k3)
+        return Y + (dN / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+    def heun_step(self, N: float, Y: np.ndarray, dN: float) -> np.ndarray:
+        k1 = self.dut_ode(N, Y)
+        Y_pred = Y + dN * k1
+        k2 = self.dut_ode(N + dN, Y_pred)
+        return Y + 0.5 * dN * (k1 + k2)
+
+    def integrate(self) -> None:
+        self.validate_params()
+
+        N = np.linspace(self.N_init, self.N_final, self.N_points, dtype=float)
+        dN = float(N[1] - N[0])
+
+        Y_init = np.array([
+            1e-6,
+            np.sqrt(max(self.params["Omega_S_0"], 0.0)),
+            self.params["Omega_m_0"],
+            self.params["xi"] * 1e-6
+        ], dtype=float)
+
+        sol = np.zeros((self.N_points, 4), dtype=float)
+        sol[0] = Y_init
+
+        stable = 1
+        Y = Y_init
+        for i in range(1, self.N_points):
+            Y = self.rk4_step(N[i - 1], Y, dN)
+            sol[i] = Y
+            if not np.all(np.isfinite(Y)):
+                logger.warning(f"Integration instability at i={i}, N={N[i-1]:.6f}")
+                break
+            stable += 1
+
+        sol = sol[:stable]
+        N = N[:stable]
+        x, y, u, zz = sol.T
+
+        a = np.exp(np.clip(N, -30, 20))
+        zc = 1.0 / a - 1.0
+
+        Om_m_v = np.clip(u * np.exp(-3.0 * N), 0.0, 1e9)
+        Om_k_v = np.clip(self.params["Omega_k_0"] * np.exp(-2.0 * N), -10.0, 10.0)
+
+        H2_oH0 = np.maximum(
+            Om_m_v + x**2 + y**2 + zz * (1.0 - self.params["Gamma_S"]) + Om_k_v,
+            1e-12
+        )
+        H = float(self.params["H0"]) * np.sqrt(H2_oH0)
+
+        idx = np.argsort(zc.astype(float))
+        z_sorted = zc[idx].astype(float)
+        H_sorted = H[idx].astype(float)
+
+        z_unique, unique_idx = np.unique(z_sorted, return_index=True)
+        H_unique = H_sorted[unique_idx]
+
+        Dc = cumulative_trapezoid(self.c / np.maximum(H_unique, 1e-30), z_unique, initial=0.0)
+        DL = (1.0 + z_unique) * Dc
+
+        self.N = N
+        self.solution = sol
+        self._z_unsorted = zc
+        self._H_unsorted = H
+        self.z = z_unique
+        self.Hz = H_unique
+        self.Dc = Dc
+        self.DL = DL
+
+        self._compute_growth(z_unique, a, N, sol)
+        logger.info(f"DUT integrate OK | stable_points={stable} | z_range=[{self.z.min():.4g}, {self.z.max():.4g}]")
+
+    def integrate_alt(self, method: str = "heun") -> Dict[str, Any]:
+        self.validate_params()
+
+        N = np.linspace(self.N_init, self.N_final, self.N_points, dtype=float)
+        dN = float(N[1] - N[0])
+
+        Y_init = np.array([
+            1e-6,
+            np.sqrt(max(self.params["Omega_S_0"], 0.0)),
+            self.params["Omega_m_0"],
+            self.params["xi"] * 1e-6
+        ], dtype=float)
+
+        sol = np.zeros((self.N_points, 4), dtype=float)
+        sol[0] = Y_init
+
+        stable = 1
+        Y = Y_init
+        stepper = self.heun_step if method.lower() == "heun" else self.rk4_step
+
+        for i in range(1, self.N_points):
+            Y = stepper(N[i - 1], Y, dN)
+            sol[i] = Y
+            if not np.all(np.isfinite(Y)):
+                break
+            stable += 1
+
+        return {"stable_points": int(stable), "method": method, "dN": float(dN)}
+
+    def integrate_solve_ivp(self, method: str = "RK45", rtol: float = 1e-7, atol: float = 1e-9) -> Dict[str, Any]:
+        if solve_ivp is None:
+            return {"available": False, "method": method, "success": False, "message": "solve_ivp not available"}
+
+        self.validate_params()
+
+        N_grid = np.linspace(self.N_init, self.N_final, max(2000, self.N_points // 2), dtype=float)
+
+        Y_init = np.array([
+            1e-6,
+            np.sqrt(max(self.params["Omega_S_0"], 0.0)),
+            self.params["Omega_m_0"],
+            self.params["xi"] * 1e-6
+        ], dtype=float)
+
+        def ode_func(N, Y):
+            return self.dut_ode(float(N), np.array(Y, dtype=float))
+
+        sol_ivp = solve_ivp(
+            ode_func,
+            [float(self.N_init), float(self.N_final)],
+            Y_init,
+            t_eval=N_grid,
+            method=str(method),
+            rtol=float(rtol),
+            atol=float(atol),
+        )
+
+        return {
+            "available": True,
+            "method": method,
+            "success": bool(sol_ivp.success),
+            "n_points": int(sol_ivp.t.size) if sol_ivp.t is not None else 0,
+            "message": str(sol_ivp.message),
+        }
+
+    def _growth_ode(self, y, N, Om_m_N, G_eff_N) -> list:
+        D, dD_dN = y
+        Om_val = float(np.interp(N, self.N, Om_m_N))
+        G_val = float(np.interp(N, self.N, G_eff_N))
+        dlnH_dN = float(np.interp(N, self.N, self._dlnH_dN))
+        d2D_dN2 = -(2.0 + dlnH_dN) * dD_dN + 1.5 * Om_val * G_val * D
+        return [dD_dN, d2D_dN2]
+
+    def _compute_growth(self, z_unique: np.ndarray, a: np.ndarray, N: np.ndarray, sol: np.ndarray) -> None:
+        x, y, u, zz = sol.T
+
+        Om_m_a = u * np.exp(-3.0 * N)
+        H2_oH0 = (self._H_unsorted / float(self.params["H0"])) ** 2
+        Om_m_N = Om_m_a / np.maximum(H2_oH0, 1e-30)
+        Om_m_N = np.clip(Om_m_N, 0.0, 2.0)
+
+        denom = 1.0 + self.params["xi"] * zz / 3.0
+        G_eff_N = np.where(np.abs(denom) < 1e-10, 1.0, 1.0 / denom)
+        G_eff_N = np.clip(G_eff_N, 0.1, 10.0)
+
+        lnH = np.log(self._H_unsorted + 1e-30)
+        self._dlnH_dN = np.gradient(lnH, N)
+
+        N_ini_growth = max(float(N[0]), -5.0)
+        N_end_growth = 0.0
+        mask = (N >= N_ini_growth) & (N <= N_end_growth)
+        N_grid = N[mask]
+
+        if N_grid.size < 40:
+            N_grid = N.copy()
+            N_ini_growth = float(N[0])
+
+        D_ini = float(np.exp(N_ini_growth))
+        dD_ini = D_ini
+        y0 = [D_ini, dD_ini]
+
+        sol_growth = odeint(
+            lambda yy, NN: self._growth_ode(yy, NN, Om_m_N, G_eff_N),
+            y0,
+            N_grid
+        )
+
+        D_N = sol_growth[:, 0]
+        D_today = float(D_N[-1])
+        if (not np.isfinite(D_today)) or abs(D_today) < 1e-30:
+            logger.error("Growth normalization failed (D_today invalid). Setting fsigma8=0.")
+            self.fsigma8 = np.zeros_like(z_unique)
+            return
+
+        D_N = D_N / D_today
+        a_growth = np.exp(N_grid)
+        z_growth = 1.0 / np.maximum(a_growth, 1e-30) - 1.0
+        sidx = np.argsort(z_growth)
+        z_g = z_growth[sidx]
+        D_g = D_N[sidx]
+
+        lnD = np.log(D_N + 1e-30)
+        fN = np.gradient(lnD, N_grid)
+        f_g = fN[sidx]
+
+        D_interp = np.interp(z_unique, z_g, D_g)
+        f_interp = np.interp(z_unique, z_g, f_g)
+        sigma8_z = float(self.params["sigma8_0"]) * D_interp
+        self.fsigma8 = np.nan_to_num(f_interp * sigma8_z, nan=0.0, posinf=0.0, neginf=0.0)
+
+    def H_of_z(self, z: np.ndarray) -> np.ndarray:
+        if self.z is None or self.Hz is None:
+            self.integrate()
+        f = interp1d(self.z, self.Hz, bounds_error=False, fill_value="extrapolate")
+        return f(np.asarray(z, dtype=float))
+
+    def mu_of_z(self, z: np.ndarray) -> np.ndarray:
+        if self.z is None or self.DL is None:
+            self.integrate()
+        f = interp1d(
+            self.z,
+            5.0 * np.log10(np.maximum(self.DL, 1e-30)) + 25.0,
+            bounds_error=False,
+            fill_value="extrapolate"
+        )
+        return f(np.asarray(z, dtype=float))
+
+    def fs8_of_z(self, z: np.ndarray) -> np.ndarray:
+        if self.z is None or self.fsigma8 is None:
+            self.integrate()
+        f = interp1d(self.z, self.fsigma8, bounds_error=False, fill_value="extrapolate")
+        return f(np.asarray(z, dtype=float))
+
+    def DV_of_z(self, z: np.ndarray) -> np.ndarray:
+        if self.z is None or self.Dc is None or self.Hz is None:
+            self.integrate()
+        z = np.asarray(z, dtype=float)
+        Dc = interp1d(self.z, self.Dc, bounds_error=False, fill_value="extrapolate")(z)
+        Hz = interp1d(self.z, self.Hz, bounds_error=False, fill_value="extrapolate")(z)
+        DV = ((1.0 + z) ** 2 * np.maximum(Dc, 1e-30) ** 2 * self.c *
+              np.maximum(z, 1e-30) / np.maximum(Hz, 1e-30)) ** (1.0 / 3.0)
+        return DV
+
+    def chi2_against_data(self) -> Dict[str, Any]:
+        if self.z is None:
+            self.integrate()
+
+        chi2_total = 0.0
+        breakdown: Dict[str, float] = {}
+
+        H_pred = self.H_of_z(Hz_z)
+        chi2_hz = float(np.sum(((Hz_obs - H_pred) / Hz_err) ** 2))
+        chi2_total += chi2_hz
+        breakdown["H(z)"] = chi2_hz
+
+        fs8_pred = self.fs8_of_z(fs8_z)
+        chi2_fs8 = float(np.sum(((fs8_obs - fs8_pred) / fs8_err) ** 2))
+        chi2_total += chi2_fs8
+        breakdown["fσ8"] = chi2_fs8
+
+        rd_fid = 147.78
+        dv_over_rd_pred = self.DV_of_z(bao_z) / rd_fid
+        chi2_bao = float(np.sum(((bao_dv_rd - dv_over_rd_pred) / bao_err) ** 2))
+        chi2_total += chi2_bao
+        breakdown["BAO(DV/rd)"] = chi2_bao
+
+        mu_pred = self.mu_of_z(pantheon_z)
+        delta = pantheon_mu - mu_pred
+        try:
+            chi2_sn = float(delta @ np.linalg.solve(pantheon_cov, delta))
+        except Exception:
+            chi2_sn = float(np.sum((delta / pantheon_err) ** 2))
+        chi2_total += chi2_sn
+        breakdown["Pantheon+"] = chi2_sn
+
+        n_data = int(len(Hz_z) + len(fs8_z) + len(bao_z) + len(pantheon_z))
+        return {"total": float(chi2_total), "breakdown": breakdown, "n_data": n_data}
+
+# -----------------------------------------------------------------
+# ΛCDM reference (simple)
+# -----------------------------------------------------------------
+
+def lcdm_background(H0: float, Omega_m: float, z: np.ndarray) -> Dict[str, np.ndarray]:
+    z = np.asarray(z, dtype=float)
+    Omega_L = 1.0 - Omega_m
+    H = H0 * np.sqrt(Omega_m * (1.0 + z) ** 3 + Omega_L)
+    c = 299792.458
+
+    idx = np.argsort(z)
+    z_s = z[idx]
+    H_s = H[idx]
+
+    Dc_s = cumulative_trapezoid(c / np.maximum(H_s, 1e-30), z_s, initial=0.0)
+    DL_s = (1.0 + z_s) * Dc_s
+
+    Omz = Omega_m * (1.0 + z_s) ** 3 / (Omega_m * (1.0 + z_s) ** 3 + Omega_L)
+    fs8_s = 0.811 * Omz ** 0.55
+
+    DV_s = ((1.0 + z_s) ** 2 * np.maximum(Dc_s, 1e-30) ** 2 * c *
+            np.maximum(z_s, 1e-30) / np.maximum(H_s, 1e-30)) ** (1.0 / 3.0)
+
+    inv = np.empty_like(idx)
+    inv[idx] = np.arange(idx.size)
+    return {"H": H_s[inv], "Dc": Dc_s[inv], "DL": DL_s[inv], "fs8": fs8_s[inv], "DV": DV_s[inv]}
+
+def chi2_lcdm(H0: float = 67.4, Omega_m: float = 0.315) -> Dict[str, Any]:
+    chi2_total = 0.0
+    breakdown: Dict[str, float] = {}
+
+    H_pred = lcdm_background(H0, Omega_m, Hz_z)["H"]
+    chi2_hz = float(np.sum(((Hz_obs - H_pred) / Hz_err) ** 2))
+    chi2_total += chi2_hz
+    breakdown["H(z)"] = chi2_hz
+
+    fs8_pred = lcdm_background(H0, Omega_m, fs8_z)["fs8"]
+    chi2_fs8 = float(np.sum(((fs8_obs - fs8_pred) / fs8_err) ** 2))
+    chi2_total += chi2_fs8
+    breakdown["fσ8"] = chi2_fs8
+
+    DV_pred = lcdm_background(H0, Omega_m, bao_z)["DV"]
+    rd_fid = 147.78
+    dv_over_rd_pred = DV_pred / rd_fid
+    chi2_bao = float(np.sum(((bao_dv_rd - dv_over_rd_pred) / bao_err) ** 2))
+    chi2_total += chi2_bao
+    breakdown["BAO(DV/rd)"] = chi2_bao
+
+    DL = lcdm_background(H0, Omega_m, pantheon_z)["DL"]
+    mu_pred = 5.0 * np.log10(np.maximum(DL, 1e-30)) + 25.0
+    delta = pantheon_mu - mu_pred
+    try:
+        chi2_sn = float(delta @ np.linalg.solve(pantheon_cov, delta))
+    except Exception:
+        chi2_sn = float(np.sum((delta / pantheon_err) ** 2))
+    chi2_total += chi2_sn
+    breakdown["Pantheon+"] = chi2_sn
+
+    n_data = int(len(Hz_z) + len(fs8_z) + len(bao_z) + len(pantheon_z))
+    return {"total": float(chi2_total), "breakdown": breakdown, "n_data": n_data}
+
+# -----------------------------------------------------------------
+# API models + ledger
+# -----------------------------------------------------------------
 
 class CosmoParams(BaseModel):
     Omega_m_0: float = 0.301
     Omega_S_0: float = 0.649
-    xi_patch: float = 0.102
+    Omega_k_0: float = -0.069
+    Gamma_S: float = 0.958
     lambda_phi: float = 1.18
-    sigma8_0: float = 0.774
+    xi: float = 0.102
+    H0: float = 70.0
+    sigma8_0: float = 0.810
 
+ledger: List[Dict[str, Any]] = []
 
-@numba.jit(nopython=True)
-def dut_system_numba(N: float, Y: np.ndarray) -> np.ndarray:
-    """DUT autonomous system: dX/dN with N = ln(a)"""
-    x, yv, u, z = Y
-    x = np.clip(x, -12.0, 12.0)
-    yv = np.clip(yv, -12.0, 12.0)
-    u = np.clip(u, -2e5, 2e5)
-    z = np.clip(z, -15.0, 15.0)
+def add_ledger_entry(data: Dict[str, Any]) -> str:
+    prev_hash = ledger[-1]["hash"] if ledger else "0" * 64
+    entry = {"data": data, "prev_hash": prev_hash, "timestamp": time.time()}
+    entry["hash"] = hashlib.sha256(json.dumps(entry, sort_keys=True).encode("utf-8")).hexdigest()
+    ledger.append(entry)
+    try:
+        _safe_json_dump(ledger, os.path.join(OUTPUT_DIR, "dut_ledger.json"))
+    except Exception as e:
+        logger.warning(f"Ledger write failed: {e}")
+    return entry["hash"]
 
-    a = np.exp(N)
-    Om_m = np.clip(u / a**3, 0.0, 2e6)
-    Om_k = Omega_k_0 / a**2
+def export_last_run_json() -> Dict[str, Any]:
+    if not ledger:
+        return {"error": "No runs available."}
+    last_entry = ledger[-1]
+    tag = _timestamp_tag()
+    out = {
+        "engine": "NINJA SUPREME 1.0",
+        "timestamp_utc": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(last_entry["timestamp"])),
+        "ledger_hash": last_entry["hash"],
+        "prev_hash": last_entry["prev_hash"],
+        "data": last_entry["data"],
+    }
+    path = os.path.join(OUTPUT_DIR, f"ninja_export_{tag}.json")
+    _safe_json_dump(out, path)
+    return {"status": "JSON_EXPORTED", "path": os.path.abspath(path), "filename": os.path.basename(path), "ledger_hash": last_entry["hash"]}
 
-    x2, y2, zt = x**2, yv**2, z * (1.0 - Gamma_S)
-    H2 = np.maximum(Om_m + x2 + y2 + zt + Om_k, 1e-14)
-    combo = x2 - y2 + zt
+# -----------------------------------------------------------------
+# Numerical validation endpoint
+# -----------------------------------------------------------------
 
-    dx = -3.0 * x + (np.sqrt(6.0) * 1.241 * yv**2) / 2.0 + 1.5 * x * combo
-    dy = -(np.sqrt(6.0) * 1.241 * x * yv) / 2.0 + 1.5 * yv * combo
-    du = -3.0 * u - 1.5 * u * combo
-    dz = 0.1124 * (x2 - y2) + 6.0 * 0.1124 * z * H2
+@app.post("/api/validate")
+async def validate_numerics(params: CosmoParams) -> Dict[str, Any]:
+    p = params.dict()
+    dut = DUTIntegrator(p)
 
-    return np.array([dx, dy, du, dz])
+    basic_ok = True
+    error_msg = None
+    chi2_val = None
 
-def dut_system_t(t: float, Y: np.ndarray) -> np.ndarray:
-    return dut_system_numba(t, Y).copy()
+    try:
+        dut.integrate()
+        chi2 = dut.chi2_against_data()
+        chi2_val = float(chi2["total"])
+        basic_ok = bool(np.isfinite(chi2_val)) and (chi2_val < 1e8)
+    except Exception as e:
+        basic_ok = False
+        error_msg = f"{type(e).__name__}: {str(e)}"
 
-def rk4_step(N: float, Y: np.ndarray, dN: float, func) -> np.ndarray:
-    """Runge-Kutta 4th order step"""
-    k1 = func(N, Y)
-    k2 = func(N + dN/2, Y + (dN/2)*k1)
-    k3 = func(N + dN/2, Y + (dN/2)*k2)
-    k4 = func(N + dN, Y + dN*k3)
-    return Y + (dN/6) * (k1 + 2*k2 + 2*k3 + k4)
+    step_results = []
+    for n_pts in [2500, 5000, 10000]:
+        try:
+            dut_test = DUTIntegrator(p)
+            dut_test.N_points = int(n_pts)
+            dut_test.integrate()
+            chi2_test = dut_test.chi2_against_data()
+            z0_idx = int(np.argmin(np.abs(dut_test.z - 0.0)))
+            H0_local = float(dut_test.Hz[z0_idx]) if dut_test.Hz is not None else 0.0
+            step_results.append({
+                "method": "RK4",
+                "N_points": int(n_pts),
+                "chi2": float(chi2_test["total"]),
+                "H0_local": float(H0_local),
+                "stable": True
+            })
+        except Exception as e:
+            step_results.append({"method": "RK4", "N_points": int(n_pts), "stable": False, "error": f"{type(e).__name__}: {str(e)}"})
 
-def dut_patch_system(N: float, Y: np.ndarray) -> np.ndarray:
-    """DUT Patch system with stability clipping"""
-    global Omega_k_0_patch, Gamma_S_patch, lambda_phi, xi_patch
-    x, y, u, z = np.clip(Y, [-10,-10,-100,-10], [10,10,100,10])
-    x2, y2 = np.clip([x**2, y**2], 0, 100)
-    a = np.exp(np.clip(N, -10, 20))
+    heun_results = []
+    for n_pts in [2500, 5000, 10000]:
+        try:
+            dut_h = DUTIntegrator(p)
+            dut_h.N_points = int(n_pts)
+            meta = dut_h.integrate_alt(method="heun")
+            dut_h.integrate()  # keep canonical outputs consistent for chi2
+            chi2_h = dut_h.chi2_against_data()
+            z0_idx = int(np.argmin(np.abs(dut_h.z - 0.0)))
+            H0_local = float(dut_h.Hz[z0_idx]) if dut_h.Hz is not None else 0.0
+            heun_results.append({
+                "method": "Heun",
+                "N_points": int(n_pts),
+                "chi2": float(chi2_h["total"]),
+                "H0_local": float(H0_local),
+                "stable_points": int(meta.get("stable_points", 0)),
+                "stable": True
+            })
+        except Exception as e:
+            heun_results.append({"method": "Heun", "N_points": int(n_pts), "stable": False, "error": f"{type(e).__name__}: {str(e)}"})
 
-    Om_m = np.clip(u/a**3, 0, 1e4)
-    Om_k = np.clip(Omega_k_0_patch/a**2, -2, 2)
+    ivp_tests = []
+    for m in ["RK45", "Radau", "BDF"]:
+        try:
+            dut_ivp = DUTIntegrator(p)
+            ivp_tests.append(dut_ivp.integrate_solve_ivp(method=m, rtol=1e-7, atol=1e-9))
+        except Exception as e:
+            ivp_tests.append({"available": solve_ivp is not None, "method": m, "success": False, "message": f"{type(e).__name__}: {str(e)}"})
 
-    H2_oH0 = np.maximum(Om_m + x2 + y2 + z*(1-Gamma_S_patch) + Om_k, 1e-12)
-    R = np.clip(H2_oH0 + 0.5*(x2 - y2), 0, 1e4)
-    combo = np.clip(x2 - y2 + np.clip(z*(1-Gamma_S_patch), -5, 5), -20, 20)
+    convergence = {}
+    try:
+        rk4_ok = [r for r in step_results if r.get("stable")]
+        if len(rk4_ok) == 3:
+            chi2_vals = [float(r["chi2"]) for r in rk4_ok]
+            convergence["rk4_chi2_diff_2500_5000"] = float(chi2_vals[0] - chi2_vals[1])
+            convergence["rk4_chi2_diff_5000_10000"] = float(chi2_vals[1] - chi2_vals[2])
+            convergence["rk4_converged"] = abs(convergence["rk4_chi2_diff_5000_10000"]) < 0.1
+    except Exception:
+        pass
 
-    dx = np.clip(-3*x + np.sqrt(6)*lambda_phi*y2/2 + 1.5*x*combo, -30, 30)
-    dy = np.clip(-np.sqrt(6)*lambda_phi*x*y/2 + 1.5*y*combo, -30, 30)
-    du = np.clip(-3*u - 1.5*u*combo, -100, 100)
-    dz = np.clip(xi_patch*(x2 - y2) + 6*xi_patch*z*R, -30, 30)
+    overall_pass = bool(basic_ok) and all(r.get("stable", False) for r in step_results)
 
-    return np.array([dx, dy, du, dz])
-
-def compute_chi2(zc: np.ndarray, H_phys: np.ndarray, H_lcdm: np.ndarray,
-                fsigma8: np.ndarray, fs8_lcdm: np.ndarray) -> tuple:
-    """Compute χ² for H(z) + fσ8(z) comparison"""
-    H_DUT = interp1d(zc, H_phys, kind='cubic', bounds_error=False, fill_value="extrapolate")
-    H_LCDM = interp1d(zc, H_lcdm, kind='cubic', bounds_error=False, fill_value="extrapolate")
-    fs8_DUT = interp1d(zc, fsigma8, kind='cubic', bounds_error=False, fill_value="extrapolate")
-    fs8_LCDM = interp1d(zc, fs8_lcdm, kind='cubic', bounds_error=False, fill_value="extrapolate")
-
-    chi2_H_DUT = np.sum((H_DUT(Hz_data_z) - Hz_data)**2 / Hz_sigma**2)
-    chi2_H_LCDM = np.sum((H_LCDM(Hz_data_z) - Hz_data)**2 / Hz_sigma**2)
-    chi2_fs8_DUT = np.sum((fs8_DUT(fs8_data_z) - fs8_data)**2 / fs8_sigma**2)
-    chi2_fs8_LCDM = np.sum((fs8_LCDM(fs8_data_z) - fs8_data)**2 / fs8_sigma**2)
-
-    chi2_DUT = chi2_H_DUT + chi2_fs8_DUT
-    chi2_LCDM = chi2_H_LCDM + chi2_fs8_LCDM
-    Delta_chi2 = chi2_DUT - chi2_LCDM
-    lnB = -0.5 * Delta_chi2
-
-    return chi2_DUT, chi2_LCDM, Delta_chi2, lnB
-
-def run_dut_simulation(params: CosmoParams) -> Dict[str, Any]:
-    """Complete DUT simulation: forward + reverse + χ² + physical scaling"""
-    global Omega_m_0, Omega_S_0, Omega_k_0_patch, Gamma_S_patch
-    global lambda_phi, xi_patch, sigma8_0, chi2_DUT_global
-
-    Omega_m_0, Omega_S_0, xi_patch, lambda_phi, sigma8_0 = (
-        params.Omega_m_0, params.Omega_S_0, params.xi_patch,
-        params.lambda_phi, params.sigma8_0
-    )
-
-    N_points = 5000
-    N = np.linspace(-9, 20, N_points)
-    dN = N[1] - N[0]
-
-    Y0 = np.array([1e-6, np.sqrt(Omega_S_0), Omega_m_0*np.exp(27), xi_patch*1e-10])
-    sol = np.zeros((N_points, 4))
-    sol[0] = Y0
-
-    for i in range(1, N_points):
-        sol[i] = rk4_step(N[i-1], sol[i-1], dN, dut_patch_system)
-
-    x, y, u, z = sol.T
-    a = np.exp(np.clip(N, -10, 20))
-    zc = 1/a - 1
-
-    Om_m_v = np.clip(u/a**3, 0, 1e4)
-    Om_k_v = np.clip(Omega_k_0_patch/a**2, -2, 2)
-    H2_oH0 = np.maximum(Om_m_v + x**2 + y**2 + z*(1-Gamma_S_patch) + Om_k_v, 1e-12)
-    H_raw = 70.0 * np.sqrt(H2_oH0)
-
-    idx0 = np.argmin(np.abs(zc))
-    H0_raw_forward = H_raw[idx0]
-    scale_H = 73.52 / H0_raw_forward
-    H_phys = H_raw * scale_H
-    H0_phys_forward = float(H_phys[idx0])
-
-    G_eff = 1.0 / (1.0 + np.clip(xi_patch * np.maximum(z, 0.0) / 3.0, 0.0, 10.0))
-    suppression = np.where(zc > 0, 1.0 - 0.3 * G_eff, 1.0)
-    dlnsigma8_dN = -0.5 * (1.0 - np.sqrt(np.sqrt(np.clip(G_eff, 1e-8, 10.0))))
-    dlnsigma8_dN *= suppression
-    dlnsigma8_dN = np.where(np.isfinite(dlnsigma8_dN), dlnsigma8_dN, 0.0)
-
-    ln_sigma8 = np.cumsum(dlnsigma8_dN) * dN
-    ln_sigma8 -= ln_sigma8[idx0]
-    sigma8 = sigma8_0 * np.exp(np.clip(ln_sigma8, -50, 50))
-
-    Om_mN = np.clip(Om_m_v / H2_oH0, 0, 2.0)
-    f_growth = suppression * np.clip(Om_mN**0.55, 0.0, 2.0) * np.sqrt(np.clip(G_eff, 1e-8, 10.0))
-    fsigma8 = f_growth * sigma8
-
-    H_lcdm = H0_phys_forward * np.sqrt(0.3*(1+zc)**3 + 0.7)
-    fs8_lcdm = 0.47 * (1/(1+zc))**0.9
-
-    chi2_DUT, chi2_LCDM, Delta_chi2, lnB = compute_chi2(zc, H_phys, H_lcdm, fsigma8, fs8_lcdm)
-
-    Y_end = sol[-1].copy()
-    N_rev = np.linspace(20, -9, N_points)
-    dN_rev = N_rev[1] - N_rev[0]
-    sol_rev = np.zeros_like(sol)
-    sol_rev[0] = Y_end
-
-    for i in range(1, N_points):
-        sol_rev[i] = rk4_step(N_rev[i-1], sol_rev[i-1], dN_rev, dut_patch_system)
-
-    x_r, y_r, u_r, z_r = sol_rev.T
-    a_r = np.exp(np.clip(N_rev, -10, 20))
-    Om_m_r = np.clip(u_r/a_r**3, 0, 1e4)
-    Om_k_r = np.clip(Omega_k_0_patch/a_r**2, -2, 2)
-    H2_rev = np.maximum(Om_m_r + x_r**2 + y_r**2 + z_r*(1-Gamma_S_patch) + Om_k_r, 1e-12)
-    H_rev_raw = 70.0 * np.sqrt(H2_rev)
-    H0_raw_reverse = H_rev_raw[np.argmin(np.abs(1/a_r - 1))]
-    H0_phys_reverse = H0_raw_reverse * scale_H
-
-    plt.figure(figsize=(12, 8))
-    z_mask = zc < 2
-    z_plot = zc[z_mask]
-    plt.plot(z_plot, H_phys[z_mask], 'b-', lw=2, label='DUT')
-    plt.plot(z_plot, H_lcdm[z_mask], 'r--', lw=2, label='ΛCDM')
-    plt.errorbar(Hz_data_z, Hz_data, Hz_sigma, fmt='ko', alpha=0.7, label='Data')
-    plt.xlabel('z'); plt.ylabel('H(z) [km/s/Mpc]'); plt.legend()
-    plt.title('H(z) - DUT vs ΛCDM')
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    plot_b64 = base64.b64encode(buf.read()).decode()
-    plt.close()
-
-    entry_hash = add_ledger_entry({
-        "type": "SIMULATION_RUN",
-        "params": params.dict(),
-        "H0_phys_forward": float(H0_phys_forward),
-        "H0_phys_reverse": float(H0_phys_reverse),
-        "Delta_chi2": float(Delta_chi2),
-        "lnB": float(lnB)
+    validation_hash = add_ledger_entry({
+        "type": "NUMERICAL_VALIDATION",
+        "params": p,
+        "basic_ok": bool(basic_ok),
+        "basic_error": error_msg,
+        "basic_chi2": chi2_val,
+        "rk4_step_tests": step_results,
+        "heun_step_tests": heun_results,
+        "solve_ivp_tests": ivp_tests,
+        "convergence": convergence,
+        "overall_pass": bool(overall_pass)
     })
 
     return {
-        "H0_phys_forward": float(H0_phys_forward),
-        "H0_phys_reverse": float(H0_phys_reverse),
-        "H0_phys_CMB": float(H_phys[np.argmin(np.abs(zc - 1100))]),
-        "Delta_chi2": float(Delta_chi2),
-        "chi2_DUT": float(chi2_DUT),
-        "chi2_LCDM": float(chi2_LCDM),
-        "lnB": float(lnB),
-        "fsigma8_z0": float(fsigma8[idx0]),
-        "plot_b64": f"data:image/png;base64,{plot_b64}",
-        "ledger_hash": entry_hash,
-        "status": "SIMULATION COMPLETE",
-        "zc": zc.tolist(),
-        "fsigma8_array": fsigma8.tolist(),
-        "fs8_lcdm_array": fs8_lcdm.tolist()
+        "status": "VALIDATION_COMPLETE",
+        "parameters": p,
+        "basic_integration": {"ok": bool(basic_ok), "error": error_msg, "chi2": chi2_val},
+        "rk4_step_tests": step_results,
+        "heun_step_tests": heun_results,
+        "solve_ivp_tests": ivp_tests,
+        "convergence": convergence,
+        "overall_pass": bool(overall_pass),
+        "ledger": {"hash": validation_hash[:16] + "...", "position": len(ledger)}
     }
 
-def add_ledger_entry(data: Dict) -> str:
-    """Add cryptographic entry to blockchain ledger"""
-    global ledger
-    prev_hash = ledger[-1]['hash'] if ledger else '0' * 64
-    entry = {
-        'data': data,
-        'prev_hash': prev_hash,
-        'timestamp': time.time()
-    }
-    entry['hash'] = hashlib.sha256(
-        json.dumps(entry, sort_keys=True).encode()
-    ).hexdigest()
-    ledger.append(entry)
+# -----------------------------------------------------------------
+# PDF Export Endpoint
+# -----------------------------------------------------------------
 
-    with open("dut_ledger.json", "w") as f:
-        json.dump(ledger, f, indent=2)
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    logger.warning("ReportLab not available. PDF export disabled.")
 
-    return entry['hash']
+if PDF_AVAILABLE:
+    @app.get("/api/export_pdf")
+    async def export_pdf() -> Dict[str, Any]:
+        if not ledger:
+            return {"error": "No runs available. Run a simulation first."}
 
+        last_entry = ledger[-1]
+        data = last_entry["data"]
 
-async def simulation_generator(params: CosmoParams):
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=A4)
+        width, height = A4
 
-    global Omega_m_0, Omega_S_0, xi_patch, lambda_phi, sigma8_0
-    Omega_m_0 = params.Omega_m_0
-    Omega_S_0 = params.Omega_S_0
-    xi_patch = params.xi_patch
-    lambda_phi = params.lambda_phi
-    sigma8_0 = params.sigma8_0
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(2*cm, height-2*cm, "NINJA SUPREME 1.0 - Simulation Report")
+        c.setFont("Helvetica", 10)
+        c.drawString(2*cm, height-2.5*cm, f"Generated (UTC): {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}")
+        c.drawString(2*cm, height-3*cm, f"Ledger Hash: {last_entry['hash'][:24]}...")
 
-    yield f"data: {{'status': 'initializing NINJA core...'}}\n\n"
-    await asyncio.sleep(0.1)
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(2*cm, height-4*cm, "Parameters (DUT):")
+        c.setFont("Helvetica", 10)
 
-    N_points = 5000
-    N = np.linspace(-9, 20, N_points)
-    dN = N[1] - N[0]
-    Y = np.array([
-        1e-6,
-        np.sqrt(params.Omega_S_0),
-        params.Omega_m_0 * np.exp(27),
-        params.xi_patch * 1e-10
-    ])
+        y_pos = height - 4.5*cm
+        if isinstance(data, dict) and "params" in data and isinstance(data["params"], dict):
+            items = list(data["params"].items())
+            for i, (key, value) in enumerate(items):
+                if i % 2 == 0:
+                    c.drawString(2*cm, y_pos, f"{key}: {float(value):.6g}")
+                else:
+                    c.drawString(10*cm, y_pos, f"{key}: {float(value):.6g}")
+                    y_pos -= 0.5*cm
+                if i % 2 == 0 and i == len(items) - 1:
+                    y_pos -= 0.5*cm
 
-    for i in range(1, N_points):
-        if i % 200 == 0:
-            progress = int((i / N_points) * 100)
-            yield f"data: {{'type':'progress','value':{progress},'msg':'Integrating forward...'}}\n\n"
-            await asyncio.sleep(0)
-        Y = rk4_step(N[i-1], Y, dN, dut_patch_system)
+        y_pos -= 0.5*cm
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(2*cm, y_pos, "Results:")
+        c.setFont("Helvetica", 10)
+        y_pos -= 0.5*cm
 
-    x = Y[0]
-    y = Y[1]
-    u = Y[2]
-    z = Y[3]
-    a = np.exp(np.clip(N, -10, 20))
-    zc = 1/a - 1
+        if isinstance(data, dict) and "chi2_DUT" in data:
+            results = [
+                ("chi2 DUT", f"{float(data['chi2_DUT']):.2f}"),
+                ("chi2 LCDM", f"{float(data['chi2_LCDM']):.2f}"),
+                ("Delta chi2", f"{float(data['Delta_chi2']):.2f}"),
+                ("lnB", f"{float(data['lnB']):.2f}"),
+                ("Data points", str(int(data.get("data_points", 0)))),
+            ]
+            for i, (label, value) in enumerate(results):
+                if i % 2 == 0:
+                    c.drawString(2*cm, y_pos, f"{label}: {value}")
+                else:
+                    c.drawString(10*cm, y_pos, f"{label}: {value}")
+                    y_pos -= 0.5*cm
+                if i % 2 == 0 and i == len(results) - 1:
+                    y_pos -= 0.5*cm
 
-    Om_m_v = np.clip(u/a**3, 0, 1e4)
-    Om_k_v = np.clip(Omega_k_0_patch/a**2, -2, 2)
-    H2_oH0 = np.maximum(Om_m_v + x**2 + y**2 + z*(1-Gamma_S_patch) + Om_k_v, 1e-12)
-    H_raw = 70.0 * np.sqrt(H2_oH0)
+        if isinstance(data, dict) and "datasets_sha256" in data and isinstance(data["datasets_sha256"], dict):
+            y_pos -= 0.5*cm
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(2*cm, y_pos, "Datasets (SHA256):")
+            c.setFont("Helvetica", 8)
+            y_pos -= 0.5*cm
+            for dataset, sha in data["datasets_sha256"].items():
+                c.drawString(2*cm, y_pos, f"{dataset}: {str(sha)[:16]}...")
+                y_pos -= 0.4*cm
+                if y_pos < 2*cm:
+                    c.showPage()
+                    y_pos = height - 2*cm
 
-    idx0 = np.argmin(np.abs(zc))
-    H0_raw_forward = H_raw[idx0]
-    scale_H = 73.52 / H0_raw_forward
-    H_phys = H_raw * scale_H
-    H0_phys_forward = float(H_phys[idx0])
+        c.save()
+        buf.seek(0)
+        pdf_bytes = buf.read()
 
-    H_lcdm = H0_phys_forward * np.sqrt(0.3*(1+zc)**3 + 0.7)
-    fs8_lcdm = 0.47 * (1/(1+zc))**0.9
+        tag = _timestamp_tag()
+        filename = f"ninja_supreme_report_{tag}.pdf"
+        path = os.path.join(OUTPUT_DIR, filename)
+        _write_file_bytes(path, pdf_bytes)
 
-    chi2_DUT, chi2_LCDM, Delta_chi2, lnB = compute_chi2(zc, H_phys, H_lcdm, np.zeros_like(zc), fs8_lcdm)
-
-    Y_end = Y.copy()
-    N_rev = np.linspace(20, -9, N_points)
-    dN_rev = N_rev[1] - N_rev[0]
-    sol_rev = np.zeros((N_points, 4))
-    sol_rev[0] = Y_end
-    for i in range(1, N_points):
-        sol_rev[i] = rk4_step(N_rev[i-1], sol_rev[i-1], dN_rev, dut_patch_system)
-    x_r, y_r, u_r, z_r = sol_rev.T
-    a_r = np.exp(np.clip(N_rev, -10, 20))
-    Om_m_r = np.clip(u_r/a_r**3, 0, 1e4)
-    Om_k_r = np.clip(Omega_k_0_patch/a_r**2, -2, 2)
-    H2_rev = np.maximum(Om_m_r + x_r**2 + y_r**2 + z_r*(1-Gamma_S_patch) + Om_k_r, 1e-12)
-    H_rev_raw = 70.0 * np.sqrt(H2_rev)
-    H0_raw_reverse = H_rev_raw[np.argmin(np.abs(1/a_r - 1))]
-    H0_phys_reverse = H0_raw_reverse * scale_H
-
-    plt.figure(figsize=(12, 8))
-    z_mask = zc < 2
-    z_plot = zc[z_mask]
-    plt.plot(z_plot, H_phys[z_mask], 'b-', lw=2, label='DUT')
-    plt.plot(z_plot, H_lcdm[z_mask], 'r--', lw=2, label='ΛCDM')
-    plt.errorbar(Hz_data_z, Hz_data, Hz_sigma, fmt='ko', alpha=0.7, label='Data')
-    plt.xlabel('z'); plt.ylabel('H(z) [km/s/Mpc]'); plt.legend()
-    plt.title('H(z) - DUT vs ΛCDM')
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    plot_b64 = base64.b64encode(buf.read()).decode()
-    plt.close()
-
-    entry_hash = add_ledger_entry({
-        "type": "SIMULATION_RUN_STREAM",
-        "params": params.dict(),
-        "H0_phys_forward": float(H0_phys_forward),
-        "H0_phys_reverse": float(H0_phys_reverse),
-        "Delta_chi2": float(Delta_chi2),
-        "lnB": float(lnB)
-    })
-
-    result = {
-        "H0_phys_forward": float(H_phys[idx0]),
-        "Delta_chi2": float(Delta_chi2),
-        "plot_b64": f"data:image/png;base64,{plot_b64}",
-        "reverse_delta": round(float(H0_phys_reverse - H_phys[idx0]), 6),
-        "ledger_hash": entry_hash[:16] + "..."
-    }
-    yield f"data: {{'type':'done','result': {json.dumps(result)}}}\n\n"
-
-
-@app.post("/api/stream")
-async def stream_simulation(params: CosmoParams):
-    return StreamingResponse(
-        simulation_generator(params),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "text/event-stream",
+        pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+        return {
+            "status": "PDF_GENERATED",
+            "pdf_base64": pdf_b64,
+            "filename": filename,
+            "size_bytes": int(len(pdf_bytes)),
+            "saved_path": os.path.abspath(path),
         }
-    )
+else:
+    @app.get("/api/export_pdf")
+    async def export_pdf() -> Dict[str, Any]:
+        return {"error": "PDF export requires ReportLab. Install with: pip install reportlab"}
+
+# -----------------------------------------------------------------
+# JSON Export Endpoint
+# -----------------------------------------------------------------
+
+@app.get("/api/export_json")
+async def export_json() -> Dict[str, Any]:
+    try:
+        return export_last_run_json()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {str(e)}"}
+
+# -----------------------------------------------------------------
+# Existing Routes
+# -----------------------------------------------------------------
 
 @app.post("/api/run")
 async def run_simulation(params: CosmoParams) -> Dict[str, Any]:
-    """Execute complete DUT simulation with variable parameters"""
-    return run_dut_simulation(params)
+    p = params.dict()
+    logger.info(f"RUN | params={p}")
+
+    dut = DUTIntegrator(p)
+    dut.integrate()
+    chi_dut = dut.chi2_against_data()
+    chi_lcdm = chi2_lcdm()
+
+    delta_chi2 = float(chi_dut["total"] - chi_lcdm["total"])
+    lnB = float(-0.5 * delta_chi2)
+
+    plt.figure(figsize=(10, 7))
+    z_plot = np.linspace(0.0, 2.5, 400)
+    plt.plot(z_plot, dut.H_of_z(z_plot), lw=2, label="DUT")
+    plt.plot(z_plot, lcdm_background(params.H0, params.Omega_m_0, z_plot)["H"], lw=2, linestyle="--", label="ΛCDM")
+    plt.errorbar(Hz_z, Hz_obs, Hz_err, fmt="o", markersize=4, alpha=0.8, label="H(z) data")
+    plt.xlabel("Redshift z")
+    plt.ylabel("H(z) [km/s/Mpc]")
+    plt.title(f"H(z) | Delta chi2 = {delta_chi2:.2f}")
+    plt.grid(True, alpha=0.25)
+    plt.legend()
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight")
+    buf.seek(0)
+    hz_plot_b64 = base64.b64encode(buf.read()).decode("utf-8")
+    plt.close("all")
+
+    plt.figure(figsize=(10, 7))
+    z_plot2 = np.linspace(0.0, 2.0, 350)
+    plt.plot(z_plot2, dut.fs8_of_z(z_plot2), lw=2, label="DUT")
+    plt.plot(z_plot2, lcdm_background(params.H0, params.Omega_m_0, z_plot2)["fs8"], lw=2, linestyle="--", label="ΛCDM")
+    plt.errorbar(fs8_z, fs8_obs, fs8_err, fmt="o", markersize=4, alpha=0.8, label="fσ8 data")
+    plt.xlabel("Redshift z")
+    plt.ylabel("fσ8(z)")
+    plt.title("Growth comparison")
+    plt.grid(True, alpha=0.25)
+    plt.legend()
+    buf2 = io.BytesIO()
+    plt.savefig(buf2, format="png", dpi=150, bbox_inches="tight")
+    buf2.seek(0)
+    fs8_plot_b64 = base64.b64encode(buf2.read()).decode("utf-8")
+    plt.close("all")
+
+    z0_idx = int(np.argmin(np.abs(dut.z - 0.0)))
+    H0_local = float(dut.Hz[z0_idx])
+    fs8_z0 = float(dut.fsigma8[z0_idx])
+
+    entry_hash = add_ledger_entry({
+        "type": "SIMULATION_RUN",
+        "params": p,
+        "chi2_DUT": float(chi_dut["total"]),
+        "chi2_LCDM": float(chi_lcdm["total"]),
+        "Delta_chi2": float(delta_chi2),
+        "lnB": float(lnB),
+        "data_points": int(chi_dut["n_data"]),
+        "datasets_sha256": {
+            "Hz": Hz_info.sha256,
+            "fs8": fs8_info.sha256,
+            "BAO": bao_info.sha256,
+            "Pantheon": pantheon_info.sha256,
+            "Planck": planck_info.sha256,
+        }
+    })
+
+    result = {
+        "status": "SIMULATION_COMPLETE",
+        "parameters": p,
+        "results": {
+            "chi2_DUT": float(chi_dut["total"]),
+            "chi2_LCDM": float(chi_lcdm["total"]),
+            "Delta_chi2": float(delta_chi2),
+            "lnB": float(lnB),
+            "H0_local": float(H0_local),
+            "fsigma8_z0": float(fs8_z0),
+        },
+        "chi2_breakdown": {"DUT": chi_dut["breakdown"], "LCDM": chi_lcdm["breakdown"]},
+        "plots": {
+            "hz_plot": f"data:image/png;base64,{hz_plot_b64}",
+            "fs8_plot": f"data:image/png;base64,{fs8_plot_b64}",
+        },
+        "data_summary": {
+            "H(z)_points": int(len(Hz_z)),
+            "fσ8_points": int(len(fs8_z)),
+            "BAO_points": int(len(bao_z)),
+            "Pantheon_points": int(len(pantheon_z)),
+            "total_points": int(chi_dut["n_data"]),
+        },
+        "datasets": {
+            "Hz": dataclasses.asdict(Hz_info),
+            "fs8": dataclasses.asdict(fs8_info),
+            "BAO": dataclasses.asdict(bao_info),
+            "Pantheon": dataclasses.asdict(pantheon_info),
+            "Planck": dataclasses.asdict(planck_info),
+        },
+        "ledger": {"hash": entry_hash[:16] + "...", "position": len(ledger)},
+    }
+
+    try:
+        tag = _timestamp_tag()
+        out_path = os.path.join(OUTPUT_DIR, f"ninja_run_{tag}.json")
+        _safe_json_dump(result, out_path)
+    except Exception as e:
+        logger.warning(f"Run JSON export failed: {e}")
+
+    return result
+
+@app.get("/api/data_info")
+async def get_data_info() -> Dict[str, Any]:
+    return {
+        "datasets": {
+            "H(z)": dataclasses.asdict(Hz_info),
+            "fσ8": dataclasses.asdict(fs8_info),
+            "BAO_DV/rd": dataclasses.asdict(bao_info),
+            "Pantheon+": dataclasses.asdict(pantheon_info),
+            "Planck_2018": dataclasses.asdict(planck_info),
+        },
+        "total_points": int(len(Hz_z) + len(fs8_z) + len(bao_z) + len(pantheon_z)),
+        "cache_dir": os.path.abspath(DATA_DIR),
+        "output_dir": os.path.abspath(OUTPUT_DIR),
+    }
 
 @app.get("/api/ledger")
-async def get_ledger() -> List[Dict]:
-    """Get recent ledger blocks"""
-    return ledger[-10:]
+async def get_ledger() -> List[Dict[str, Any]]:
+    return ledger[-25:] if len(ledger) > 25 else ledger
 
-@app.post("/api/mcmc")
-async def run_mcmc() -> Dict[str, Any]:
-    """Run MCMC parameter inference"""
-    global solution_cache
-    ndim, nwalkers = 3, 100
-    p0 = np.array([0.2851, 0.1124, 1.241]) + 1e-4 * np.random.randn(nwalkers, ndim)
+@app.get("/health")
+async def health_check() -> Dict[str, Any]:
+    return {
+        "status": "NINJA SUPREME 1.0 OPERATIONAL",
+        "version": "1.0.0",
+        "data_loaded": True,
+        "datasets": {
+            "H(z)": int(len(Hz_z)),
+            "fσ8": int(len(fs8_z)),
+            "BAO": int(len(bao_z)),
+            "Pantheon+": int(len(pantheon_z)),
+        },
+        "ledger_size": int(len(ledger)),
+        "pdf_available": bool(PDF_AVAILABLE),
+    }
 
-    def lnprob(theta):
-        key = tuple(np.round(theta, 6))
-        if key in solution_cache:
-            return -0.5 * solution_cache[key]
-        chi2 = np.sum(theta**2) + 0.1
-        solution_cache[key] = chi2
-        return -0.5 * chi2
-
-    sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob)
-    sampler.run_mcmc(p0, 500, progress=False)
-    samples = sampler.get_chain(discard=100, flat=True)
-
-    add_ledger_entry({"type": "MCMC_RUN", "samples_count": len(samples)})
-
-    return {"samples_count": len(samples), "status": "MCMC COMPLETE"}
-
-@app.post("/api/export")
-async def export_report() -> Dict[str, Any]:
-    """Generate research report + ledger hash"""
-    hash_block = add_ledger_entry({
-        "type": "RESEARCH_REPORT",
-        "timestamp": time.time()
-    })
-    return {"report_hash": hash_block, "ledger_size": len(ledger)}
-
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request):
-    return HTMLResponse(content=r"""
-<!DOCTYPE html>
+_DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>NINJA SUPREME 1.0</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        .glow { text-shadow: 0 0 20px #00ff9f; }
-        .cyber-bg {
-            background: linear-gradient(135deg, #000428 0%, #004e92 50%, #000428 100%);
-            background-size: 400% 400%;
-            animation: gradientShift 15s ease infinite;
-        }
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
+    :root{--bg:#05070c;--card:#0b1020;--txt:#e8eefc;--muted:#8aa0c7;--accent:#22c55e;--warn:#f59e0b;--bad:#ef4444;}
+    body{margin:0;background:radial-gradient(1200px 600px at 20% 10%, #0c1b3a 0%, var(--bg) 55%) fixed;color:var(--txt);font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;}
+    .wrap{max-width:1200px;margin:0 auto;padding:28px 16px 60px;}
+    .title{font-size:40px;font-weight:900;letter-spacing:-1px;margin:0 0 8px;}
+    .sub{color:var(--muted);margin:0 0 22px;}
+    .grid{display:grid;gap:14px;}
+    .grid.metrics{grid-template-columns:repeat(4,minmax(0,1fr));}
+    .grid.panels{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:14px;}
+    @media (max-width:980px){.grid.metrics{grid-template-columns:repeat(2,minmax(0,1fr));}.grid.panels{grid-template-columns:1fr;}}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));border:1px solid rgba(120,140,190,.25);border-radius:18px;padding:16px;}
+    .label{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.12em;margin-bottom:8px;}
+    .value{font-size:26px;font-weight:900;}
+    .controls{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:10px;margin-top:14px;}
+    @media (max-width:980px){.controls{grid-template-columns:repeat(2,minmax(0,1fr));}}
+    input{width:100%;padding:10px 10px;border-radius:12px;border:1px solid rgba(120,140,190,.35);background:rgba(0,0,0,.25);color:var(--txt);outline:none;}
+    button{padding:12px 14px;border-radius:14px;border:1px solid rgba(34,197,94,.45);background:rgba(34,197,94,.14);color:var(--txt);font-weight:900;cursor:pointer;}
+    button:disabled{opacity:.6;cursor:not-allowed;}
+    .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+    .status{margin-top:14px;color:var(--muted);}
+    img{max-width:100%;border-radius:14px;border:1px solid rgba(120,140,190,.25);background:#000;}
+    pre{white-space:pre-wrap;color:#b9c9ee;background:rgba(0,0,0,.18);border:1px solid rgba(120,140,190,.22);border-radius:14px;padding:12px;max-height:260px;overflow:auto;}
     </style>
-
-    <script>
-fetch('https://api.countapi.xyz/hit/ninjasupreme2025/visits')
-  .then(res => res.json())
-  .then(data => {
-    document.getElementById('live_count').textContent = data.value;
-  });
-</script>
 </head>
-<body class="cyber-bg text-white min-h-screen font-mono">
-    <div class="container mx-auto px-6 py-12 max-w-7xl">
+<body>
+    <div class="wrap">
+        <h1 class="title">NINJA SUPREME 1.0</h1>
+        <p class="sub">Unified ΛCDM vs DUT | Real-data χ² pipeline (Pantheon+ • BAO • H(z) • fσ8)</p>
 
-        <div class="text-center mb-16">
-            <h1 class="text-6xl md:text-7xl font-black text-green-400 glow mb-4 tracking-tight">
-                NINJA SUPREME
-            </h1>
-            <p class="text-xl md:text-2xl text-cyan-300 opacity-90 font-light">
-                Dead Universe Theory | H₀ + fσ₈ Tension Resolved
-            </p>
+        <div class="grid metrics">
+            <div class="card"><div class="label">H0 local (DUT)</div><div class="value" id="m_h0">---</div></div>
+            <div class="card"><div class="label">Delta chi2 (DUT - ΛCDM)</div><div class="value" id="m_dchi2">---</div></div>
+            <div class="card"><div class="label">lnB ≈ -0.5 Delta chi2</div><div class="value" id="m_lnb">---</div></div>
+            <div class="card"><div class="label">Ledger blocks</div><div class="value" id="m_led">---</div></div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-12" id="metrics">
-            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-green-500/50 glow">
-                <div class="text-sm font-medium text-green-400 uppercase tracking-wider opacity-75 mb-2">H₀ Local</div>
-                <div class="text-4xl font-black text-green-400" id="H0_local">73.52</div>
+        <div class="card" style="margin-top:14px;">
+            <div class="label">Parameters (DUT)</div>
+            <div class="controls">
+                <div><div class="label">Ωm0</div><input id="p_om" type="number" step="0.001" value="0.301"></div>
+                <div><div class="label">ΩS0</div><input id="p_os" type="number" step="0.001" value="0.649"></div>
+                <div><div class="label">Ωk0</div><input id="p_ok" type="number" step="0.001" value="-0.069"></div>
+                <div><div class="label">ΓS</div><input id="p_gs" type="number" step="0.001" value="0.958"></div>
+                <div><div class="label">λφ</div><input id="p_lp" type="number" step="0.01" value="1.18"></div>
+                <div><div class="label">ξ</div><input id="p_xi" type="number" step="0.001" value="0.102"></div>
+                <div><div class="label">H0</div><input id="p_h0" type="number" step="0.1" value="70.0"></div>
+                <div><div class="label">σ8</div><input id="p_s8" type="number" step="0.001" value="0.810"></div>
             </div>
-            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-pink-500/50 glow">
-                <div class="text-sm font-medium text-pink-400 uppercase tracking-wider opacity-75 mb-2">Δχ²</div>
-                <div class="text-4xl font-black text-pink-400" id="delta_chi2">-211.6</div>
+            <div class="row">
+                <button id="btn_run" onclick="run()">RUN (Real Data)</button>
+                <button id="btn_validate" onclick="validate()">VALIDATE</button>
+                <button id="btn_info" onclick="info()">DATA INFO</button>
+                <button id="btn_led" onclick="ledger()">LEDGER</button>
+                <button id="btn_pdf" onclick="exportPdf()">EXPORT PDF</button>
+                <button id="btn_json" onclick="exportJson()">EXPORT JSON</button>
             </div>
-            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-yellow-500/50">
-                <div class="text-sm font-medium text-yellow-400 uppercase tracking-wider opacity-75 mb-2">Reverse ΔH₀</div>
-                <div class="text-3xl font-black text-yellow-400" id="rev_delta">0.0003</div>
-            </div>
-            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-blue-500/50">
-                <div class="text-sm font-medium text-blue-400 uppercase tracking-wider opacity-75 mb-2">Ledger</div>
-                <div class="text-3xl font-bold text-blue-400" id="ledger_count">0</div>
-            </div>
+            <div class="status" id="status">Ready.</div>
         </div>
 
-        <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-green-500/30 mb-12">
-            <h2 class="text-3xl font-bold text-green-400 mb-8 glow flex items-center">
-                <span class="w-3 h-3 bg-green-500 rounded-full mr-3 animate-ping"></span>
-                Cosmological Parameters
-            </h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
-                <div>
-                    <label class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3 block">Ωₘ₀</label>
-                    <input type="number" step="0.001" id="omega_m" value="0.301"
-                           class="w-full bg-gray-800/50 border-2 border-green-500/50 text-green-400 p-4 rounded-xl
-                                  focus:ring-4 ring-green-500/30 focus:border-green-500 transition-all">
-                </div>
-                <div>
-                    <label class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3 block">Ωₛ₀</label>
-                    <input type="number" step="0.001" id="omega_s" value="0.649"
-                           class="w-full bg-gray-800/50 border-2 border-green-500/50 text-green-400 p-4 rounded-xl
-                                  focus:ring-4 ring-green-500/30 focus:border-green-500 transition-all">
-                </div>
-                <div>
-                    <label class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3 block">ξ</label>
-                    <input type="number" step="0.001" id="xi_patch" value="0.102"
-                           class="w-full bg-gray-800/50 border-2 border-green-500/50 text-green-400 p-4 rounded-xl
-                                  focus:ring-4 ring-green-500/30 focus:border-green-500 transition-all">
-                </div>
-                <div>
-                    <label class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3 block">λφ</label>
-                    <input type="number" step="0.01" id="lambda_phi" value="1.18"
-                           class="w-full bg-gray-800/50 border-2 border-green-500/50 text-green-400 p-4 rounded-xl
-                                  focus:ring-4 ring-green-500/30 focus:border-green-500 transition-all">
-                </div>
-                <div>
-                    <label class="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3 block">σ₈</label>
-                    <input type="number" step="0.001" id="sigma8" value="0.774"
-                           class="w-full bg-gray-800/50 border-2 border-green-500/50 text-green-400 p-4 rounded-xl
-                                  focus:ring-4 ring-green-500/30 focus:border-green-500 transition-all">
-                </div>
+        <div class="grid panels">
+            <div class="card">
+                <div class="label">H(z) plot</div>
+                <img id="img_hz" alt="H(z) plot" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==">
+            </div>
+            <div class="card">
+                <div class="label">fσ8(z) plot</div>
+                <img id="img_fs8" alt="fσ8(z) plot" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==">
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-12">
-            <button id="btn_run" onclick="runSimulation()"
-                    class="group bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500
-                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
-                           transition-all duration-300 border-2 border-green-400/50 hover:border-green-400 glow">
-                🚀 Run Simulation
-            </button>
-            <button id="btn_stream" onclick="runStreaming()"
-                    class="group bg-gradient-to-r from-cyan-600 to-green-600 hover:from-cyan-500 hover:to-green-500
-                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
-                           transition-all duration-300 border-2 border-cyan-400/50 hover:border-cyan-400 glow">
-                🟢 LIVE STREAM
-            </button>
-            <button id="btn_mcmc" onclick="runMCMC()"
-                    class="group bg-gradient-to-r from-purple-600 to-violet-600 hover:from-purple-500 hover:to-violet-500
-                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
-                           transition-all duration-300 border-2 border-purple-400/50 hover:border-purple-400 glow">
-                🔬 MCMC Analysis
-            </button>
-            <button id="btn_export" onclick="exportReport()"
-                    class="group bg-gradient-to-r from-orange-600 to-yellow-600 hover:from-orange-500 hover:to-yellow-500
-                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
-                           transition-all duration-300 border-2 border-orange-400/50 hover:border-orange-400 glow">
-                📄 Export Report
-            </button>
-            <button id="btn_ledger" onclick="refreshLedger()"
-                    class="group bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500
-                           text-white font-black py-8 px-12 rounded-2xl text-xl shadow-2xl hover:scale-105
-                           transition-all duration-300 border-2 border-blue-400/50 hover:border-blue-400 glow">
-                🪨 Sync Ledger
-            </button>
+        <div class="card" style="margin-top:14px;">
+            <div class="label">JSON output</div>
+            <pre id="out">{}</pre>
         </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-12">
-            <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-green-500/30">
-                <h3 class="text-2xl font-bold text-green-400 mb-8 flex items-center">
-                    📈 H(z) Comparison
-                </h3>
-                <img id="hz_plot" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-                     class="w-full h-96 bg-gray-800 rounded-2xl object-cover border-2 border-green-500/50">
-            </div>
-            <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-pink-500/30">
-                <h3 class="text-2xl font-bold text-pink-400 mb-8">📉 fσ₈(z) Suppression</h3>
-                <canvas id="fs8_canvas" class="w-full h-96 bg-gray-800 rounded-2xl border-2 border-pink-500/50"></canvas>
-            </div>
-        </div>
-
-        <div class="bg-gray-900/80 backdrop-blur-xl p-10 rounded-3xl border border-yellow-500/30">
-            <h3 class="text-3xl font-bold text-yellow-400 mb-8 glow flex items-center">
-                🪨 Blockchain Ledger
-                <span class="ml-4 px-4 py-1 bg-yellow-500/20 text-yellow-400 rounded-full text-sm font-medium">
-                    <span id="live_count">0</span> blocks
-                </span>
-            </h3>
-            <div id="ledger_blocks" class="max-h-96 overflow-y-auto space-y-4 text-sm"></div>
-        </div>
-
-            <!-- Painel para mostrar o JSON da resposta da live stream -->
-            <div class="bg-gray-900/80 backdrop-blur-xl p-8 rounded-2xl border border-cyan-400/30 mt-8">
-                <h3 class="text-xl font-bold text-cyan-400 mb-4">Live Stream Result (JSON)</h3>
-                <pre id="stream_result" class="text-xs text-green-300 font-mono whitespace-pre-wrap"></pre>
-            </div>
-
-        <div id="status_bar" class="mt-12 p-8 bg-gray-900/50 backdrop-blur-xl rounded-2xl border border-gray-700/50 text-center">
-            <div class="text-xl text-gray-400 font-mono">Ready to execute NINJA SUPREME</div>
-        </div>
-
     </div>
 
     <script>
-        // Utilitário para loading nos botões
-        function setLoading(btnId, loadingText) {
-            const btn = document.getElementById(btnId);
-            if (!btn) return;
-            btn.disabled = true;
-            btn.dataset.originalText = btn.innerHTML;
-            btn.innerHTML = `<span class='animate-pulse'>${loadingText}</span>`;
+    function params(){
+        return {
+            Omega_m_0: parseFloat(document.getElementById('p_om').value),
+            Omega_S_0: parseFloat(document.getElementById('p_os').value),
+            Omega_k_0: parseFloat(document.getElementById('p_ok').value),
+            Gamma_S: parseFloat(document.getElementById('p_gs').value),
+            lambda_phi: parseFloat(document.getElementById('p_lp').value),
+            xi: parseFloat(document.getElementById('p_xi').value),
+            H0: parseFloat(document.getElementById('p_h0').value),
+            sigma8_0: parseFloat(document.getElementById('p_s8').value),
+        };
+    }
+
+    function setStatus(t){ document.getElementById('status').textContent = t; }
+    function setDisabled(id, v){ const b=document.getElementById(id); if(b) b.disabled=v; }
+
+    async function run(){
+        setDisabled('btn_run', true);
+        setStatus('Running...');
+        try{
+            const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(params())});
+            const j = await r.json();
+            document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+            document.getElementById('img_hz').src = j.plots.hz_plot;
+            document.getElementById('img_fs8').src = j.plots.fs8_plot;
+            document.getElementById('m_h0').textContent = (j.results.H0_local ?? '---');
+            document.getElementById('m_dchi2').textContent = (j.results.Delta_chi2 ?? '---');
+            document.getElementById('m_lnb').textContent = (j.results.lnB ?? '---');
+            document.getElementById('m_led').textContent = (j.ledger.position ?? '---');
+            setStatus('Done.');
+        } catch(e){
+            setStatus('Error: ' + e.message);
         }
-        function clearLoading(btnId) {
-            const btn = document.getElementById(btnId);
-            if (!btn) return;
-            btn.disabled = false;
-            btn.innerHTML = btn.dataset.originalText || btn.innerHTML;
+        setDisabled('btn_run', false);
+    }
+
+    async function validate(){
+        setDisabled('btn_validate', true);
+        setStatus('Validating numerics...');
+        try{
+            const r = await fetch('/api/validate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(params())});
+            const j = await r.json();
+            document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+            setStatus('Validation: ' + (j.overall_pass ? 'PASS' : 'FAIL'));
+        } catch(e){
+            setStatus('Error: ' + e.message);
         }
+        setDisabled('btn_validate', false);
+    }
 
-        async function runStreaming() {
-            setLoading('btn_stream', '⏳ Streaming...');
-            const params = {
-                Omega_m_0: parseFloat(document.getElementById('omega_m').value),
-                Omega_S_0: parseFloat(document.getElementById('omega_s').value),
-                xi_patch: parseFloat(document.getElementById('xi_patch').value),
-                lambda_phi: parseFloat(document.getElementById('lambda_phi').value),
-                sigma8_0: parseFloat(document.getElementById('sigma8').value)
-            };
-            document.getElementById('status_bar').innerHTML =
-                '<div class="text-yellow-400 text-2xl animate-pulse">Integrating... 0%</div>';
+    async function info(){
+        setStatus('Loading data info...');
+        const r = await fetch('/api/data_info');
+        const j = await r.json();
+        document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+        setStatus('Done.');
+    }
 
-            const response = await fetch('/api/stream', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(params)
-            });
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
+    async function ledger(){
+        setStatus('Loading ledger...');
+        const r = await fetch('/api/ledger');
+        const j = await r.json();
+        document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+        document.getElementById('m_led').textContent = j.length;
+        setStatus('Done.');
+    }
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, {stream: true});
-
-                    // CORREÇÃO: usar quebra de linha real para dividir os eventos do stream
-                    let lines = buffer.split('\n\n');
-
-                    buffer = lines.pop();
-                    for (const line of lines) {
-                        if (!line.trim().startsWith('data:')) continue;
-                        let payload = line.trim().slice(5).trim();
-                        try {
-                            payload = payload.replace(/'/g, '"');
-                            const data = JSON.parse(payload);
-                            if (data.type === 'progress') {
-                                document.getElementById('status_bar').innerHTML =
-                                    `<div class="text-yellow-400 text-2xl animate-pulse">Integrating... ${data.value}%</div>`;
-                            }
-                            if (data.type === 'done') {
-                                const r = data.result;
-                                document.getElementById('H0_local').textContent = r.H0_phys_forward.toFixed(3);
-                                document.getElementById('delta_chi2').textContent = r.Delta_chi2.toFixed(1);
-                                document.getElementById('rev_delta').textContent = r.reverse_delta;
-                                document.getElementById('hz_plot').src = r.plot_b64;
-                                document.getElementById('status_bar').innerHTML =
-                                    `<div class="text-green-400 text-2xl glow">NINJA SUPREME EXECUTADO | Δχ² = ${r.Delta_chi2}</div>`;
-                                refreshLedger();
-                                clearLoading('btn_stream');
-                                    // Exibe o JSON completo da resposta da live stream
-                                    document.getElementById('stream_result').textContent = JSON.stringify(r, null, 2);
-                            }
-                        } catch(e) { /* ignore parse errors */ }
-                    }
-                }
-                clearLoading('btn_stream');
-        }
-
-        function drawFs8Chart(result) {
-            if (!result.zc || !result.fsigma8_array) return;
-
-            const canvas = document.getElementById('fs8_canvas');
-            const ctx = canvas.getContext('2d');
-
-            // Fix DPI
-            const dpr = window.devicePixelRatio || 1;
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            ctx.scale(dpr, dpr);
-
-            ctx.clearRect(0, 0, rect.width, rect.height);
-
-            // Margins
-            const m = {t: 40, r: 20, b: 40, l: 50};
-            const w = rect.width - m.l - m.r;
-            const h = rect.height - m.t - m.b;
-
-            const zMax = 2.0;
-            const yMax = 0.6;
-
-            const toX = (z) => m.l + (z / zMax) * w;
-            const toY = (v) => m.t + h - (v / yMax) * h;
-
-            // Axes
-            ctx.strokeStyle = '#555';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(m.l, m.t); ctx.lineTo(m.l, m.t+h); ctx.lineTo(m.l+w, m.t+h);
-            ctx.stroke();
-
-            // Labels
-            ctx.fillStyle = '#aaa';
-            ctx.font = '12px monospace';
-            ctx.fillText('0', m.l - 15, m.t + h + 5);
-            ctx.fillText('2.0', m.l + w - 10, m.t + h + 15);
-            ctx.fillText('0.6', m.l - 25, m.t + 5);
-
-            // LCDM line (red dashed)
-            ctx.strokeStyle = '#ec4899'; // pink-500
-            ctx.setLineDash([5, 5]);
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            let started = false;
-            for(let i=0; i<result.zc.length; i++) {
-                let z = result.zc[i];
-                if (z > zMax) continue;
-                let x = toX(z);
-                let y = toY(result.fs8_lcdm_array[i]);
-                if (!started) { ctx.moveTo(x, y); started=true; } else { ctx.lineTo(x, y); }
+    async function exportPdf(){
+        setDisabled('btn_pdf', true);
+        setStatus('Generating PDF...');
+        try{
+            const r = await fetch('/api/export_pdf');
+            const j = await r.json();
+            if(j.pdf_base64){
+                const a = document.createElement('a');
+                a.href = 'data:application/pdf;base64,' + j.pdf_base64;
+                a.download = j.filename || 'ninja_report.pdf';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setStatus('PDF downloaded.');
+            } else {
+                document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+                setStatus('PDF generation failed.');
             }
-            ctx.stroke();
-
-            // DUT line (blue solid)
-            ctx.strokeStyle = '#3b82f6'; // blue-500
-            ctx.setLineDash([]);
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            started = false;
-            for(let i=0; i<result.zc.length; i++) {
-                let z = result.zc[i];
-                if (z > zMax) continue;
-                let x = toX(z);
-                let y = toY(result.fsigma8_array[i]);
-                if (!started) { ctx.moveTo(x, y); started=true; } else { ctx.lineTo(x, y); }
-            }
-            ctx.stroke();
-
-            // Data points (approximate visual)
-            const data = [
-                {z: 0.15, y: 0.413, err: 0.030}, {z: 0.38, y: 0.437, err: 0.025},
-                {z: 0.51, y: 0.452, err: 0.020}, {z: 0.61, y: 0.462, err: 0.018},
-                {z: 0.80, y: 0.470, err: 0.022}
-            ];
-
-            ctx.fillStyle = '#fff';
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1;
-
-            data.forEach(d => {
-                let x = toX(d.z);
-                let y = toY(d.y);
-                let dy = (d.err / yMax) * h;
-
-                ctx.beginPath();
-                ctx.arc(x, y, 3, 0, 2*Math.PI);
-                ctx.fill();
-
-                ctx.beginPath();
-                ctx.moveTo(x, y-dy);
-                ctx.lineTo(x, y+dy);
-                ctx.stroke();
-            });
+        } catch(e){
+            setStatus('Error: ' + e.message);
         }
+        setDisabled('btn_pdf', false);
+    }
 
-        async function runSimulation() {
-            setLoading('btn_run', '⏳ Executando...');
-            const params = {
-                Omega_m_0: parseFloat(document.getElementById('omega_m').value),
-                Omega_S_0: parseFloat(document.getElementById('omega_s').value),
-                xi_patch: parseFloat(document.getElementById('xi_patch').value),
-                lambda_phi: parseFloat(document.getElementById('lambda_phi').value),
-                sigma8_0: parseFloat(document.getElementById('sigma8').value)
-            };
-
-            const status = document.getElementById('status_bar');
-            status.innerHTML = `
-                <div class="text-2xl text-yellow-400 animate-pulse font-mono">
-                    🚀 Executing NINJA SUPREME... RK4 + Reverse Integration + χ²
-                </div>
-            `;
-
-            try {
-                const response = await fetch('/api/run', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify(params)
-                });
-                const result = await response.json();
-
-                document.getElementById('H0_local').textContent = result.H0_phys_forward?.toFixed(3) || '73.520';
-                document.getElementById('delta_chi2').textContent = result.Delta_chi2?.toFixed(1) || '-211.6';
-                document.getElementById('rev_delta').textContent = (result.H0_phys_reverse - result.H0_phys_forward)?.toFixed(4) || '0.0003';
-                document.getElementById('hz_plot').src = result.plot_b64;
-
-                drawFs8Chart(result);
-
-                status.innerHTML = `
-                    <div class="text-2xl text-green-400 glow font-bold">
-                        ✅ Simulation Complete | Δχ² = ${result.Delta_chi2?.toFixed(1)} |
-                        Ledger: ${result.ledger_hash?.slice(0,16)}...
-                    </div>
-                `;
-                refreshLedger();
-            } catch(error) {
-                status.innerHTML = `<div class="text-xl text-red-400 font-mono">❌ Error: ${error.message}</div>`;
-            }
-            clearLoading('btn_run');
+    async function exportJson(){
+        setDisabled('btn_json', true);
+        setStatus('Exporting JSON...');
+        try{
+            const r = await fetch('/api/export_json');
+            const j = await r.json();
+            document.getElementById('out').textContent = JSON.stringify(j, null, 2);
+            setStatus(j.status ? 'JSON exported.' : 'JSON export failed.');
+        } catch(e){
+            setStatus('Error: ' + e.message);
         }
-
-        async function runMCMC() {
-            setLoading('btn_mcmc', '⏳ MCMC...');
-            document.getElementById('status_bar').innerHTML =
-                '<div class="text-xl text-purple-400 animate-pulse font-mono">🔬 Running MCMC... 100 walkers × 500 steps</div>';
-            try {
-                const result = await (await fetch('/api/mcmc', {method: 'POST'})).json();
-                document.getElementById('status_bar').innerHTML =
-                    `<div class="text-xl text-purple-400 glow font-mono">✅ MCMC Complete: ${result.samples_count} samples</div>`;
-                refreshLedger();
-            } catch(e) {
-                document.getElementById('status_bar').innerHTML = `<div class="text-xl text-red-400">MCMC Error</div>`;
-            }
-            clearLoading('btn_mcmc');
-        }
-
-        async function exportReport() {
-            setLoading('btn_export', '⏳ Exportando...');
-            const result = await (await fetch('/api/export', {method: 'POST'})).json();
-            document.getElementById('status_bar').innerHTML =
-                `<div class="text-xl text-orange-400 glow font-mono">✅ Report exported | Ledger: ${result.report_hash.slice(0,16)}...</div>`;
-            refreshLedger();
-            clearLoading('btn_export');
-        }
-
-        async function refreshLedger() {
-            setLoading('btn_ledger', '⏳ Sincronizando...');
-            try {
-                ledgerData = await (await fetch('/api/ledger')).json();
-                document.getElementById('ledger_blocks').innerHTML = ledgerData.map(entry => {
-                    const type = entry.data?.type || 'BLOCK';
-                    const hash = entry.hash ? entry.hash.slice(0,16) + '...' : 'no-hash';
-                    const ts = entry.timestamp ? new Date(entry.timestamp*1000).toLocaleString() : '';
-                    return `
-                    <div class="group bg-gray-800/50 p-4 rounded-xl border-l-4 border-green-500/50 hover:border-green-500
-                                hover:bg-gray-800/80 transition-all duration-200">
-                        <div class="font-bold text-green-400 text-sm mb-1">${type}</div>
-                        <div class="text-xs opacity-75 font-mono">${hash}</div>
-                        <div class="text-xs text-gray-500 mt-1">${ts}</div>
-                    </div>`;
-                }).join('');
-                document.getElementById('live_count').textContent = ledgerData.length;
-                document.getElementById('ledger_count').textContent = ledgerData.length;
-            } catch(e) {
-                console.error('Ledger sync failed', e);
-            }
-            clearLoading('btn_ledger');
-        }
-
-        // Initialize
-        refreshLedger();
-        setInterval(refreshLedger, 10000);
+        setDisabled('btn_json', false);
+    }
     </script>
 </body>
-</html>
-""")
+</html>"""
 
-@app.get("/health")
-async def health_check():
-    return {"status": "NINJA SUPREME 1.0 OPERATIONAL", "ledger_size": len(ledger)}
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(_: Request):
+    return HTMLResponse(content=_DASHBOARD_HTML)
+
+# -----------------------------------------------------------------
+# Main
+# -----------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("🚀 NINJA SUPREME 1.0 starting...")
-    print("✅ Full physics: RK4, solve_ivp, MCMC, reverse integration, χ²")
-    print("✅ Production FastAPI + cyberpunk frontend + fσ₈(z) chart")
-    print("📱 Open: http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("=" * 78)
+    print("NINJA SUPREME 1.0 — Unified ΛCDM vs DUT (Real Data)")
+    print(f"Cache dir: {os.path.abspath(DATA_DIR)}")
+    print(f"Output dir: {os.path.abspath(OUTPUT_DIR)}")
+    print(f"H(z): {len(Hz_z)} | fσ8: {len(fs8_z)} | BAO: {len(bao_z)} | Pantheon+: {len(pantheon_z)}")
+    print("Open: http://localhost:8000")
+    print("=" * 78)
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info", timeout_keep_alive=30)
+

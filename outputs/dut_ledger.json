@@ -1,0 +1,32 @@
+[
+  {
+    "data": {
+      "Delta_chi2": 2.353506010828421e+17,
+      "chi2_DUT": 2.353506010839558e+17,
+      "chi2_LCDM": 1113707.9920614006,
+      "data_points": 58,
+      "datasets_sha256": {
+        "BAO": "477e35039dd8fda38ece7c758f87522f69c35cbd27ee5a2746a657f8f4e63e87",
+        "Hz": "a47aeabd0fce9300f71014a196326e75ce880cf6061f00380048a437d9be6d6b",
+        "Pantheon": "2086b1d9bc52fafe2cd585af7928deac3516c1e99f6319bce10df50a8908ab97",
+        "Planck": "9551b21e3005a1454eb04bc01039eeb5306383abb600e0d882ab4ab0591720f2",
+        "fs8": "1f2a28e6154a70bfbcbd15df4567eac7819e634275287f72307e2969cb83f157"
+      },
+      "lnB": -1.1767530054142106e+17,
+      "params": {
+        "Gamma_S": 0.958,
+        "H0": 70.0,
+        "Omega_S_0": 0.649,
+        "Omega_k_0": -0.069,
+        "Omega_m_0": 0.301,
+        "lambda_phi": 1.18,
+        "sigma8_0": 0.81,
+        "xi": 0.102
+      },
+      "type": "SIMULATION_RUN"
+    },
+    "hash": "9df0a6d3f099d5692adb297db55a265faffd567416c671a1ffb62fdc40f18201",
+    "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "timestamp": 1765646905.2364528
+  }
+]
